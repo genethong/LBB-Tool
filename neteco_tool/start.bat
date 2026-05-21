@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 set "DIR=%~dp0"
 set "PY_DIR=%DIR%python-embed"
 set "PY_EXE=%PY_DIR%\python.exe"
-set "PIP_EXE=%PY_DIR%\Scripts\pip.exe"
+set "PKGS=%PY_DIR%\Lib\site-packages"
 
 echo.
 echo ================================================
@@ -23,28 +23,41 @@ if not exist "%PY_EXE%" (
     powershell -Command "Expand-Archive -Path '%DIR%py_embed.zip' -DestinationPath '%PY_DIR%' -Force"
     del "%DIR%py_embed.zip"
 
-    REM Enable pip support (uncomment 'import site' in the ._pth file)
-    powershell -Command "Get-ChildItem '%PY_DIR%' -Filter '*.pth' | ForEach-Object { (Get-Content $_.FullName) -replace '#import site','import site' | Set-Content $_.FullName }"
+    REM Create site-packages folder
+    mkdir "%PKGS%" 2>nul
 
-    REM Bootstrap pip
+    REM Enable site packages by editing the ._pth file
+    for %%f in ("%PY_DIR%\python*.pth") do (
+        powershell -Command "(Get-Content '%%f' -Raw) -replace '#import site','import site' | Set-Content '%%f'"
+    )
+
+    REM Unblock downloaded files so Windows security doesn't block them
+    powershell -Command "Get-ChildItem '%PY_DIR%' -Recurse | ForEach-Object { try { Unblock-File $_.FullName } catch {} }"
+
+    REM Bootstrap pip using get-pip.py, forcing install into our embedded Python
     echo     Installing pip...
     powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%DIR%get-pip.py' -UseBasicParsing"
-    "%PY_EXE%" "%DIR%get-pip.py" --no-warn-script-location -q
+    set "PYTHONPATH=%PKGS%"
+    "%PY_EXE%" "%DIR%get-pip.py" --prefix="%PY_DIR%" --no-warn-script-location -q
     del "%DIR%get-pip.py"
-    REM Unblock all downloaded executables
-    powershell -Command "Get-ChildItem '%PY_DIR%' -Recurse -Include *.exe,*.dll | Unblock-File"
+
     echo     Python ready.
     echo.
 )
+
+REM Always set PYTHONPATH so embedded Python finds packages
+set "PYTHONPATH=%PKGS%"
 
 REM ── Step 2: Install requirements if flask not present ──
 "%PY_EXE%" -c "import flask" 2>nul
 if errorlevel 1 (
     echo [2/3] Installing dependencies (one-time^)...
-    "%PY_EXE%" -m pip install -r "%DIR%requirements.txt" --target="%PY_DIR%\Lib\site-packages" --no-warn-script-location -q
+    "%PY_EXE%" -m pip install -r "%DIR%requirements-windows.txt" --target="%PKGS%" --no-warn-script-location -q
     if errorlevel 1 (
+        echo.
         echo ERROR: Failed to install dependencies.
-        echo Try right-clicking start.bat and selecting "Run as administrator".
+        echo Your company security policy may be blocking this.
+        echo Please contact your IT team or try from a personal laptop.
         pause & exit /b 1
     )
     echo     Dependencies ready.
