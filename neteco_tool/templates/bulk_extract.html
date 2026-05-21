@@ -1,0 +1,695 @@
+{% extends "base.html" %}
+{% block title %}Bulk Extractor{% endblock %}
+
+{% block head %}
+<style>
+/* ── Wizard steps ── */
+.step-bar { display:flex; gap:0; margin-bottom:24px; }
+.step-pill {
+  flex:1; padding:10px 16px; font-size:13px; font-weight:600;
+  background:#f1f5f9; color:#94a3b8; border:1px solid #e2e8f0;
+  display:flex; align-items:center; gap:8px;
+}
+.step-pill:first-child { border-radius:8px 0 0 8px; }
+.step-pill:last-child  { border-radius:0 8px 8px 0; }
+.step-pill.active  { background:var(--accent); color:#fff; border-color:var(--accent); }
+.step-pill.done    { background:#dcfce7; color:#166534; border-color:#86efac; }
+.step-num { width:20px;height:20px;border-radius:50%;background:rgba(255,255,255,0.3);
+  display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0; }
+.step-pill.done .step-num { background:#22c55e;color:#fff; }
+
+/* ── Upload zone ── */
+.upload-zone {
+  border:2px dashed #cbd5e1; border-radius:10px; padding:28px 20px;
+  text-align:center; cursor:pointer; transition:all .2s; background:#fafafa;
+}
+.upload-zone:hover, .upload-zone.drag { border-color:var(--accent); background:#eff6ff; }
+.upload-zone svg { color:#94a3b8; }
+
+/* ── Sites preview table ── */
+.sites-table { font-size:12px; }
+.sites-table td, .sites-table th { padding:5px 10px; white-space:nowrap; }
+.row-ok   { background:#f0fdf4; }
+.row-fail { background:#fef2f2; }
+.row-ok td:first-child   { border-left:3px solid #22c55e; }
+.row-fail td:first-child { border-left:3px solid #ef4444; }
+
+/* ── Signal tree ── */
+.mo-node       { border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px; overflow:hidden; }
+.mo-header     {
+  display:flex; align-items:center; gap:10px; padding:10px 14px;
+  background:#f8fafc; cursor:pointer; user-select:none;
+}
+.mo-header:hover { background:#eff6ff; }
+.mo-header.open  { background:#eff6ff; border-bottom:1px solid #e2e8f0; }
+.mo-check      { width:16px;height:16px;flex-shrink:0;cursor:pointer; }
+.mo-label      { font-size:13px;font-weight:600;color:#0f172a;flex:1; }
+.mo-count      { font-size:11px;color:#94a3b8;background:#e2e8f0;padding:1px 7px;border-radius:10px; }
+.mo-children   { padding:6px 0; display:none; }
+.mo-children.open { display:block; }
+
+.sigtype-row   {
+  display:flex; align-items:center; gap:8px; padding:6px 14px 4px 28px;
+  cursor:pointer; border-bottom:1px solid #f1f5f9;
+}
+.sigtype-row:hover { background:#eff6ff; }
+.sigtype-label { font-size:12px;font-weight:600;color:#374151;flex:1; }
+.sigtype-count { font-size:10px;color:#94a3b8;background:#f1f5f9;padding:1px 6px;border-radius:10px; }
+/* Alarm-type rows — simple check toggle, no signal panel */
+.alarm-check-row {
+  display:flex; align-items:center; gap:8px; padding:7px 14px 7px 28px;
+  border-bottom:1px solid #f8fafc; cursor:pointer;
+}
+.alarm-check-row:hover { background:#fffbeb; }
+.alarm-check-row.enabled { background:#fef3c7; }
+
+.signals-panel { padding:0 14px 8px 44px; display:none; }
+.signals-panel.open { display:block; }
+.sig-check-row {
+  display:flex; align-items:center; gap:8px; padding:4px 0;
+  border-bottom:1px solid #f8fafc; font-size:12px;
+}
+.sig-check-row:hover { background:#f0fdf4; border-radius:4px; padding-left:4px; }
+.sig-check-row input { flex-shrink:0; }
+.sig-cname      { flex:1; color:#1e293b; font-weight:500; }
+.sig-cunit-badge{ font-size:10px; background:#e0f2fe; color:#0369a1; padding:1px 6px; border-radius:10px; flex-shrink:0; }
+.sig-cid-small  { font-family:monospace; font-size:10px; color:#94a3b8; flex-shrink:0; }
+.sigs-loading { color:#94a3b8;font-size:12px;padding:6px 0;font-style:italic; }
+
+/* ── Summary chips ── */
+.job-chip {
+  background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;
+  padding:4px 10px;font-size:11px;color:#1e40af;
+  display:flex;align-items:center;gap:6px;
+}
+.job-chip .rm { cursor:pointer;color:#94a3b8; } .job-chip .rm:hover { color:#ef4444; }
+
+/* ── Result banner ── */
+.result-banner {
+  background:#f0fdf4;border:1px solid #86efac;border-radius:10px;
+  padding:16px 20px;display:flex;align-items:center;gap:12px;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Bulk Data Extractor</h1>
+    <p>Upload a site list, select signals across multiple MO types, extract to Excel</p>
+  </div>
+</div>
+
+<div class="page-body">
+
+  <!-- ── Wizard step bar ── -->
+  <div class="step-bar" id="step-bar">
+    <div class="step-pill active" id="pill-1"><span class="step-num">1</span> Upload Sites</div>
+    <div class="step-pill"        id="pill-2"><span class="step-num">2</span> Select Signals</div>
+    <div class="step-pill"        id="pill-3"><span class="step-num">3</span> Extract</div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       STEP 1 — Upload
+  ════════════════════════════════════════ -->
+  <div id="step1">
+    <div class="row g-3">
+      <div class="col-lg-5">
+        <div class="card">
+          <div class="card-header"><h6><i data-feather="upload"></i> Upload Site List</h6></div>
+          <div class="card-body p-3">
+            <a href="/api/template/bulk-extract" class="btn btn-sm btn-outline-secondary w-100 mb-3">
+              <i data-feather="download" style="width:13px;height:13px;"></i> Download Template (.xlsx)
+            </a>
+
+            <div class="upload-zone" id="upload-zone" onclick="document.getElementById('file-input').click()"
+                 ondragover="event.preventDefault();this.classList.add('drag')"
+                 ondragleave="this.classList.remove('drag')"
+                 ondrop="handleDrop(event)">
+              <i data-feather="file-spreadsheet" style="width:36px;height:36px;"></i>
+              <p style="font-size:13px;font-weight:600;color:#374151;margin:8px 0 4px;">Drop Excel file here or click to browse</p>
+              <p style="font-size:11px;color:#94a3b8;margin:0;">Accepts .xlsx / .xls — use the template above</p>
+            </div>
+            <input type="file" id="file-input" accept=".xlsx,.xls" style="display:none" onchange="parseFile(this.files[0])">
+
+            <div id="parse-status" style="font-size:12px;margin-top:10px;display:none;"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-7">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 id="sites-preview-title"><i data-feather="list"></i> Sites Preview</h6>
+            <button class="btn btn-sm btn-primary" id="to-step2-btn" style="display:none;" onclick="goToStep2()">
+              Next: Select Signals <i data-feather="arrow-right" style="width:13px;height:13px;"></i>
+            </button>
+          </div>
+          <div class="card-body p-0" id="sites-preview-body">
+            <div class="text-center text-muted py-5" style="font-size:13px;">
+              <i data-feather="inbox" style="width:36px;height:36px;opacity:0.3;"></i>
+              <p class="mt-2">Upload a file to preview resolved sites</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       STEP 2 — Signal Selection
+  ════════════════════════════════════════ -->
+  <div id="step2" style="display:none;">
+    <div class="row g-3">
+
+      <!-- Signal tree -->
+      <div class="col-lg-7">
+        <div class="card">
+          <div class="card-header d-flex justify-content-between align-items-center">
+            <h6><i data-feather="git-branch"></i> Signal Selection</h6>
+            <div class="d-flex gap-2">
+              <button class="btn btn-xs btn-outline-secondary" style="font-size:11px;padding:2px 8px;" onclick="expandAllMO()">Expand All</button>
+              <button class="btn btn-xs btn-outline-secondary" style="font-size:11px;padding:2px 8px;" onclick="collapseAllMO()">Collapse</button>
+            </div>
+          </div>
+          <div class="card-body p-3">
+            <div style="font-size:12px;color:#64748b;margin-bottom:10px;">
+              <i data-feather="info" style="width:12px;height:12px;"></i>
+              Click a signal type row to open the signal panel.
+              Ticking any signal <strong>auto-enables</strong> that signal type for extraction.
+            </div>
+            <div id="signal-tree">
+              <div class="text-center text-muted py-4" style="font-size:13px;">Loading available MO types…</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Selected jobs summary -->
+      <div class="col-lg-5">
+        <div class="card mb-3">
+          <div class="card-header"><h6><i data-feather="check-square"></i> Selected Extractions</h6></div>
+          <div class="card-body p-3">
+            <div id="jobs-summary" style="display:flex;flex-wrap:wrap;gap:6px;min-height:40px;">
+              <span style="font-size:12px;color:#94a3b8;font-style:italic;">Nothing selected yet</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header"><h6><i data-feather="info"></i> Sites Summary</h6></div>
+          <div class="card-body p-3" id="sites-mini-summary" style="font-size:12px;"></div>
+        </div>
+
+        <div class="d-flex gap-2 mt-3">
+          <button class="btn btn-outline-secondary flex-fill" onclick="goToStep1()">
+            <i data-feather="arrow-left" style="width:13px;height:13px;"></i> Back
+          </button>
+          <button class="btn btn-primary flex-fill" onclick="goToStep3()">
+            Next: Extract <i data-feather="arrow-right" style="width:13px;height:13px;"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ════════════════════════════════════════
+       STEP 3 — Extract
+  ════════════════════════════════════════ -->
+  <div id="step3" style="display:none;">
+    <div class="row g-3">
+      <div class="col-lg-6">
+        <div class="card mb-3">
+          <div class="card-header"><h6><i data-feather="layers"></i> Extraction Plan</h6></div>
+          <div class="card-body p-3" id="extraction-plan" style="font-size:13px;"></div>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-outline-secondary flex-fill" onclick="goToStep2()">
+            <i data-feather="arrow-left" style="width:13px;height:13px;"></i> Back
+          </button>
+          <button class="btn btn-primary flex-fill" id="run-btn" onclick="runBulkExtract()">
+            <i data-feather="zap" style="width:14px;height:14px;"></i> Run Extraction
+          </button>
+        </div>
+      </div>
+      <div class="col-lg-6">
+        <div class="card">
+          <div class="card-header"><h6><i data-feather="activity"></i> Result</h6></div>
+          <div class="card-body p-3" id="extract-result">
+            <div class="text-center text-muted py-4" style="font-size:13px;">
+              <i data-feather="zap" style="width:36px;height:36px;opacity:0.3;"></i>
+              <p class="mt-2">Click "Run Extraction" to start</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /.page-body -->
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ══════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════
+let parsedRows  = [];      // from /api/bulk/parse
+let moAvailable = {};      // from /api/bulk/mo-available  {mo_type: count}
+// selections: {mo_type: {sigtype: {enabled:bool, signal_ids:[], signals:[]}}}
+let selections  = {};
+let _treeGen    = 0;       // incremented on each tree build — stale loads bail out
+
+const MO_SIG_TYPES = [
+  { key: "sampling",  label: "Sampling",    icon: "activity"    },
+  { key: "config",    label: "Config",      icon: "sliders"     },
+  { key: "statistic", label: "Statistical", icon: "bar-chart-2" },
+];
+const ALARM_SIG_TYPES = [
+  { key: "alarm_current", label: "Active Alarms",     icon: "alert-triangle" },
+  { key: "alarm_history", label: "Historical Alarms", icon: "clock" },
+];
+const ALL_SIG_TYPES = [...MO_SIG_TYPES, ...ALARM_SIG_TYPES];
+
+// ══════════════════════════════════════════════
+//  Wizard navigation
+// ══════════════════════════════════════════════
+function goToStep1(){
+  document.getElementById("step1").style.display="";
+  document.getElementById("step2").style.display="none";
+  document.getElementById("step3").style.display="none";
+  setPill(1);
+}
+function goToStep2(){
+  if(!parsedRows.length){ toast("Upload a site file first","warning"); return; }
+  document.getElementById("step1").style.display="none";
+  document.getElementById("step2").style.display="";
+  document.getElementById("step3").style.display="none";
+  setPill(2);
+  buildSignalTree();
+  buildSitesMini();
+}
+function goToStep3(){
+  const jobs = getJobs();
+  if(!jobs.length){ toast("Select at least one signal type to extract","warning"); return; }
+  document.getElementById("step2").style.display="none";
+  document.getElementById("step3").style.display="";
+  setPill(3);
+  buildExtractionPlan(jobs);
+}
+function setPill(n){
+  for(let i=1;i<=3;i++){
+    const p=document.getElementById(`pill-${i}`);
+    p.classList.remove("active","done");
+    if(i<n) p.classList.add("done");
+    if(i===n) p.classList.add("active");
+  }
+}
+
+// ══════════════════════════════════════════════
+//  Step 1 — File handling
+// ══════════════════════════════════════════════
+function handleDrop(ev){
+  ev.preventDefault();
+  document.getElementById("upload-zone").classList.remove("drag");
+  const f = ev.dataTransfer.files[0];
+  if(f) parseFile(f);
+}
+
+async function parseFile(file){
+  if(!file) return;
+  const status = document.getElementById("parse-status");
+  status.style.display=""; status.innerHTML=`<span style="color:#64748b;">Parsing ${file.name}…</span>`;
+  const fd = new FormData(); fd.append("file", file);
+  showLoading("Resolving sites…");
+  try {
+    const resp = await fetch("/api/bulk/parse",{method:"POST",body:fd});
+    const d = await resp.json();
+    hideLoading();
+    if(d.error){ status.innerHTML=`<span style="color:#ef4444;">${d.error}</span>`; return; }
+    parsedRows = d.rows;
+    status.innerHTML = `<span style="color:#166534;">✓ ${d.resolved} of ${d.total} sites resolved</span>`;
+    renderSitesPreview(d.rows);
+    // Load available MO types
+    const siteDns = d.rows.filter(r=>r.resolved).map(r=>r.site_dn);
+    if(siteDns.length){
+      const mr = await fetch("/api/bulk/mo-available",{method:"POST",
+        headers:{"Content-Type":"application/json"},body:JSON.stringify({site_dns:siteDns})});
+      moAvailable = await mr.json();
+    }
+    if(d.resolved > 0){
+      document.getElementById("to-step2-btn").style.display="";
+    }
+  } catch(e){ hideLoading(); status.innerHTML=`<span style="color:#ef4444;">${e}</span>`; }
+}
+
+function renderSitesPreview(rows){
+  const body = document.getElementById("sites-preview-body");
+  const ok   = rows.filter(r=>r.resolved).length;
+  document.getElementById("sites-preview-title").innerHTML =
+    `<i data-feather="list"></i> Sites Preview &nbsp;<span class="badge bg-success">${ok} OK</span> <span class="badge bg-danger">${rows.length-ok} Not Found</span>`;
+  let html = `<div style="overflow-x:auto;"><table class="table table-sm mb-0 sites-table"><thead><tr>
+    <th>Site ID (input)</th><th>Tenant</th><th>Date</th><th>Matched Name</th><th>Status</th>
+    </tr></thead><tbody>`;
+  rows.forEach(r=>{
+    const cls = r.resolved?"row-ok":"row-fail";
+    html += `<tr class="${cls}">
+      <td><code style="font-size:11px;">${r.site_code}</code></td>
+      <td>${r.tenant||'—'}</td><td>${r.date||'—'}</td>
+      <td>${r.resolved?r.site_name:'<span style="color:#ef4444;">Not found</span>'}</td>
+      <td><span class="status-dot ${r.site_status==='CONNECTED'?'ok':'idle'}"></span>${r.site_status||'—'}</td>
+      </tr>`;
+  });
+  html += `</tbody></table></div>`;
+  body.innerHTML = html; feather.replace();
+}
+
+// ══════════════════════════════════════════════
+//  Step 2 — Signal tree
+// ══════════════════════════════════════════════
+function escJs(s){ return s.replace(/'/g, "\\'"); }
+
+async function buildSignalTree(){
+  const gen = ++_treeGen;
+  const treeEl = document.getElementById("signal-tree");
+  if(!Object.keys(moAvailable).length){
+    treeEl.innerHTML=`<div style="color:#f59e0b;font-size:13px;">No MO types found under resolved sites. Check NE tree data.</div>`;
+    return;
+  }
+  // Initialise state for any new MO types
+  for(const mo of Object.keys(moAvailable)){
+    if(!selections[mo]) selections[mo] = {};
+    ALL_SIG_TYPES.forEach(st=>{
+      if(!selections[mo][st.key]) selections[mo][st.key]={enabled:false,signal_ids:[],signals:[]};
+    });
+  }
+  treeEl.innerHTML = Object.entries(moAvailable).map(([mo, cnt])=>`
+    <div class="mo-node" id="mo-node-${CSS.escape(mo)}">
+      <div class="mo-header" onclick="toggleMO(this,'${escJs(mo)}')">
+        <i data-feather="chevron-right" class="mo-arrow"
+           style="width:14px;height:14px;color:#94a3b8;flex-shrink:0;transition:transform .2s;"></i>
+        <span class="mo-label">${mo}</span>
+        <span class="mo-count">${cnt} NE(s)</span>
+      </div>
+      <div class="mo-children" id="mo-ch-${CSS.escape(mo)}">
+        ${MO_SIG_TYPES.map(st=>sigTypeRowHtml(mo, st)).join("")}
+        ${ALARM_SIG_TYPES.map(st=>alarmRowHtml(mo, st)).join("")}
+      </div>
+    </div>`).join("");
+  feather.replace();
+  updateJobsSummary();
+}
+
+// Click-to-open panel for Sampling / Config / Statistical
+function sigTypeRowHtml(mo, st){
+  return `
+  <div class="sigtype-row" onclick="toggleSigPanel('${escJs(mo)}','${st.key}')">
+    <i data-feather="chevron-right" id="sigarrow-${CSS.escape(mo)}-${st.key}"
+       style="width:13px;height:13px;color:#94a3b8;flex-shrink:0;transition:transform .15s;"></i>
+    <span class="sigtype-label">
+      <i data-feather="${st.icon}" style="width:12px;height:12px;margin-right:4px;"></i>${st.label}
+    </span>
+    <span class="sigtype-count" id="sigs-badge-${CSS.escape(mo)}-${st.key}"></span>
+  </div>
+  <div class="signals-panel" id="sigpanel-${CSS.escape(mo)}-${st.key}"></div>`;
+}
+
+// Simple checkbox toggle for alarm types (no signal panel)
+function alarmRowHtml(mo, st){
+  return `
+  <div class="alarm-check-row" id="alarmrow-${CSS.escape(mo)}-${st.key}"
+       onclick="toggleAlarm('${escJs(mo)}','${st.key}')">
+    <input type="checkbox" id="almck-${CSS.escape(mo)}-${st.key}"
+           onclick="event.stopPropagation();"
+           onchange="toggleAlarmFromCheck('${escJs(mo)}','${st.key}',this.checked)">
+    <label for="almck-${CSS.escape(mo)}-${st.key}" style="cursor:pointer;margin:0;flex:1;font-size:12px;">
+      <i data-feather="${st.icon}" style="width:12px;height:12px;margin-right:4px;color:#f59e0b;"></i>${st.label}
+    </label>
+  </div>`;
+}
+
+function toggleAlarm(mo, stKey){
+  const cb = document.getElementById(`almck-${CSS.escape(mo)}-${stKey}`);
+  if(cb){ cb.checked = !cb.checked; toggleAlarmFromCheck(mo, stKey, cb.checked); }
+}
+function toggleAlarmFromCheck(mo, stKey, checked){
+  if(!selections[mo]) return;
+  selections[mo][stKey].enabled = checked;
+  const row = document.getElementById(`alarmrow-${CSS.escape(mo)}-${stKey}`);
+  if(row) row.classList.toggle("enabled", checked);
+  updateJobsSummary();
+}
+
+function toggleMO(header, mo){
+  const arrow    = header.querySelector(".mo-arrow");
+  const children = document.getElementById(`mo-ch-${CSS.escape(mo)}`);
+  const open     = children.classList.toggle("open");
+  header.classList.toggle("open", open);
+  arrow.style.transform = open ? "rotate(90deg)" : "";
+}
+function expandAllMO(){
+  document.querySelectorAll(".mo-header").forEach(h=>{
+    const ch=h.nextElementSibling;
+    if(!ch.classList.contains("open")){ ch.classList.add("open"); h.classList.add("open"); h.querySelector(".mo-arrow").style.transform="rotate(90deg)"; }
+  });
+}
+function collapseAllMO(){
+  document.querySelectorAll(".mo-header").forEach(h=>{
+    h.nextElementSibling.classList.remove("open"); h.classList.remove("open"); h.querySelector(".mo-arrow").style.transform="";
+  });
+}
+
+// ══════════════════════════════════════════════
+//  Lazy-load signals per panel (matches Data Extractor)
+// ══════════════════════════════════════════════
+async function toggleSigPanel(mo, stKey){
+  const panel = document.getElementById(`sigpanel-${CSS.escape(mo)}-${stKey}`);
+  const arrow = document.getElementById(`sigarrow-${CSS.escape(mo)}-${stKey}`);
+  if(!panel) return;
+  const isOpen = panel.classList.toggle("open");
+  if(arrow) arrow.style.transform = isOpen ? "rotate(90deg)" : "";
+  if(!isOpen) return;
+
+  // Already loaded — just re-render
+  if(selections[mo] && selections[mo][stKey] && selections[mo][stKey].signals.length){
+    renderSignalCheckboxes(mo, stKey, panel); return;
+  }
+
+  panel.innerHTML = `<div class="sigs-loading">
+    <span class="spinner-border spinner-border-sm"></span> Loading signals…</div>`;
+  await loadSignals(mo, stKey, _treeGen);
+}
+
+async function loadSignals(mo, stKey, gen){
+  function stale(){ return gen !== undefined && gen !== _treeGen; }
+  const panel = document.getElementById(`sigpanel-${CSS.escape(mo)}-${stKey}`);
+  if(!panel) return;
+  try {
+    const firstSite = parsedRows.find(r=>r.resolved);
+    if(!firstSite){ panel.innerHTML=`<div class="sigs-loading">No resolved site to query.</div>`; return; }
+
+    const hierResp = await fetch("/api/ne-hierarchy",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({site_dns:[firstSite.site_dn], mo_type:mo})});
+    if(stale()) return;
+    const hier = await hierResp.json();
+    if(stale()) return;
+
+    let neDn = null;
+    if(hier && hier.length && hier[0].nes && hier[0].nes.length) neDn = hier[0].nes[0].dn;
+    if(!neDn){
+      panel.innerHTML=`<div class="sigs-loading">No NE found for this MO type.</div>`;
+      _setBadge(mo, stKey, "—"); return;
+    }
+
+    const sigResp = await fetch("/api/signal-discover",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ne_dn:neDn, signal_type:stKey})});
+    if(stale()) return;
+    const sd = await sigResp.json();
+    if(stale()) return;
+
+    if(sd.error){ panel.innerHTML=`<div class="sigs-loading" style="color:#ef4444;">${sd.error}</div>`; _setBadge(mo, stKey, "error"); return; }
+    if(!selections[mo] || !selections[mo][stKey]) return;
+    selections[mo][stKey].signals = sd.signals || [];
+    renderSignalCheckboxes(mo, stKey, panel);
+    _setBadge(mo, stKey, `${(sd.signals||[]).length} signals`);
+  } catch(e){
+    if(!stale()) panel.innerHTML=`<div class="sigs-loading" style="color:#ef4444;">${e}</div>`;
+  }
+}
+
+function _setBadge(mo, stKey, text){
+  const el = document.getElementById(`sigs-badge-${CSS.escape(mo)}-${stKey}`);
+  if(el) el.textContent = text;
+}
+
+function renderSignalCheckboxes(mo, stKey, panel){
+  const sigs = selections[mo][stKey].signals;
+  const selected = new Set(selections[mo][stKey].signal_ids.map(String));
+  if(!sigs.length){ panel.innerHTML=`<div class="sigs-loading">No signals found in dictionary for this MO type.</div>`; return; }
+
+  const panelId = `sigpanel-${CSS.escape(mo)}-${stKey}`;
+  panel.innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-xs btn-outline-secondary" style="font-size:10px;padding:1px 7px;"
+              onclick="checkAllSigs('${mo}','${stKey}',true)">All</button>
+      <button class="btn btn-xs btn-outline-secondary" style="font-size:10px;padding:1px 7px;"
+              onclick="checkAllSigs('${mo}','${stKey}',false)">None</button>
+      <input type="text" placeholder="Search signals…"
+             style="font-size:11px;padding:2px 7px;border:1px solid #e2e8f0;border-radius:5px;flex:1;min-width:100px;"
+             oninput="filterSigRows(this,'${panelId}')">
+      <span style="font-size:10px;color:#94a3b8;">${sigs.length} signals</span>
+    </div>` +
+    sigs.map(s=>`
+    <div class="sig-check-row" data-signame="${(s.name||'').toLowerCase()}">
+      <input type="checkbox" ${selected.has(String(s.id))?"checked":""}
+             onchange="onSigCheck('${mo}','${stKey}',${s.id},this.checked)">
+      <span class="sig-cname">${s.name || '(unnamed)'}</span>
+      ${s.unit ? `<span class="sig-cunit-badge">${s.unit}</span>` : ''}
+      <code class="sig-cid-small" title="Signal ID">#${s.id}</code>
+    </div>`).join("");
+}
+
+function filterSigRows(input, panelId){
+  const q = input.value.toLowerCase();
+  document.querySelectorAll(`#${panelId} .sig-check-row`).forEach(row => {
+    row.style.display = row.dataset.signame.includes(q) ? "" : "none";
+  });
+}
+
+function checkAllSigs(mo, stKey, checked){
+  selections[mo][stKey].signal_ids = checked
+    ? selections[mo][stKey].signals.map(s=>s.id)
+    : [];
+  // Auto-enable when any signal ticked; disable when none
+  selections[mo][stKey].enabled = checked && selections[mo][stKey].signal_ids.length > 0;
+  const panel = document.getElementById(`sigpanel-${CSS.escape(mo)}-${stKey}`);
+  panel.querySelectorAll("input[type=checkbox]").forEach(cb=>cb.checked=checked);
+  updateJobsSummary();
+}
+
+function onSigCheck(mo, stKey, id, checked){
+  const ids = selections[mo][stKey].signal_ids;
+  if(checked){ if(!ids.includes(id)) ids.push(id); }
+  else { selections[mo][stKey].signal_ids = ids.filter(x=>x!==id); }
+  // Auto-enable when any signal ticked; disable when none remain
+  selections[mo][stKey].enabled = selections[mo][stKey].signal_ids.length > 0;
+  updateJobsSummary();
+}
+
+function updateJobsSummary(){
+  const jobs = getJobs();
+  const el   = document.getElementById("jobs-summary");
+  if(!jobs.length){
+    el.innerHTML=`<span style="font-size:12px;color:#94a3b8;font-style:italic;">Nothing selected yet</span>`;
+    return;
+  }
+  el.innerHTML = jobs.map(j=>{
+    const isAlarm = j.signal_type.startsWith("alarm");
+    const ids = (!isAlarm && j.signal_ids.length) ? ` · ${j.signal_ids.length} signal(s)` : (isAlarm ? "" : " · all signals");
+    return `<div class="job-chip">${j.mo_type} / ${j.signal_type}${ids}</div>`;
+  }).join("");
+}
+
+function getJobs(){
+  const jobs = [];
+  for(const [mo, sigtypes] of Object.entries(selections)){
+    for(const [stKey, cfg] of Object.entries(sigtypes)){
+      if(cfg.enabled){
+        jobs.push({ mo_type:mo, signal_type:stKey, signal_ids: cfg.signal_ids || [] });
+      }
+    }
+  }
+  return jobs;
+}
+
+function buildSitesMini(){
+  const ok   = parsedRows.filter(r=>r.resolved);
+  const fail = parsedRows.filter(r=>!r.resolved);
+  document.getElementById("sites-mini-summary").innerHTML = `
+    <div>✅ <strong>${ok.length}</strong> sites resolved</div>
+    ${fail.length?`<div>❌ <strong>${fail.length}</strong> not found: ${fail.map(r=>r.site_code).join(", ")}</div>`:""}
+    <div style="margin-top:6px;color:#64748b;">Dates: ${[...new Set(ok.map(r=>r.date).filter(Boolean))].join(", ")||"(none)"}</div>`;
+}
+
+// ══════════════════════════════════════════════
+//  Step 3 — Extraction plan + run
+// ══════════════════════════════════════════════
+function buildExtractionPlan(jobs){
+  const ok = parsedRows.filter(r=>r.resolved);
+  const el = document.getElementById("extraction-plan");
+  el.innerHTML = `
+    <div style="margin-bottom:12px;">
+      <strong>${ok.length}</strong> site(s) &times; <strong>${jobs.length}</strong> signal extraction(s)
+      = up to <strong>${ok.length * jobs.length}</strong> API calls
+    </div>
+    <table class="table table-sm" style="font-size:12px;">
+      <thead><tr><th>MO Type</th><th>Signal Type</th><th>Signal IDs</th></tr></thead>
+      <tbody>
+        ${jobs.map(j=>`<tr>
+          <td>${j.mo_type}</td>
+          <td>${j.signal_type}</td>
+          <td>${j.signal_ids.length?j.signal_ids.join(", "):"<em style='color:#94a3b8;'>all</em>"}</td>
+          </tr>`).join("")}
+      </tbody>
+    </table>
+    <div style="font-size:12px;color:#64748b;margin-top:4px;">
+      Output columns: <strong>Timestamp, Site Code, Tenant, Tenant Name, NE Name, Signal Name, Value, Unit</strong>
+    </div>`;
+}
+
+async function runBulkExtract(){
+  const jobs = getJobs();
+  if(!jobs.length){ toast("No signal types selected","warning"); return; }
+  const btn = document.getElementById("run-btn");
+  btn.disabled = true; btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Extracting…`;
+  showLoading("Running bulk extraction — this may take a while…");
+  const resultEl = document.getElementById("extract-result");
+  resultEl.innerHTML = `<div style="font-size:13px;color:#64748b;text-align:center;padding:20px;">
+    <div class="spinner-border text-primary" style="width:28px;height:28px;"></div>
+    <p class="mt-3">Querying NetEco for ${parsedRows.filter(r=>r.resolved).length} site(s)…</p>
+  </div>`;
+
+  try {
+    const resp = await fetch("/api/bulk/extract",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({rows:parsedRows, jobs})});
+    const d = await resp.json();
+    hideLoading();
+    btn.disabled=false; btn.innerHTML=`<i data-feather="zap" style="width:14px;height:14px;"></i> Run Extraction`;
+    feather.replace();
+
+    if(d.error){
+      resultEl.innerHTML=`<div style="color:#ef4444;font-size:13px;padding:10px;">${d.error}</div>`;
+      toast(d.error,"error"); return;
+    }
+    const dlLink = d.download_url
+      ? `<a href="${d.download_url}" class="btn btn-success mt-3" style="font-size:13px;"
+             download="${d.filename||'BulkExtract.xlsx'}">
+           <i data-feather="download" style="width:14px;height:14px;"></i> Download Excel
+         </a>`
+      : "";
+    resultEl.innerHTML = `
+      <div class="result-banner">
+        <i data-feather="check-circle" style="width:32px;height:32px;color:#22c55e;flex-shrink:0;"></i>
+        <div>
+          <div style="font-weight:700;font-size:15px;color:#166534;">Extraction Complete</div>
+          <div style="font-size:13px;color:#374151;margin-top:4px;">
+            <strong>${d.count.toLocaleString()}</strong> rows across <strong>${d.sheets}</strong> sheet(s)
+          </div>
+          ${dlLink}
+        </div>
+      </div>`;
+    feather.replace();
+    toast(`${d.count.toLocaleString()} rows ready — click Download Excel`, "success");
+  } catch(e){
+    hideLoading();
+    btn.disabled=false; btn.innerHTML=`<i data-feather="zap" style="width:14px;height:14px;"></i> Run Extraction`;
+    feather.replace();
+    resultEl.innerHTML=`<div style="color:#ef4444;font-size:13px;padding:10px;">${e}</div>`;
+    toast(String(e),"error");
+  }
+}
+</script>
+{% endblock %}

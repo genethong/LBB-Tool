@@ -1,0 +1,1183 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+<style>
+/* ── Status bars ────────────────────────────────────── */
+.status-bar {
+  background:#fff; border:1px solid #e2e8f0; border-radius:10px;
+  padding:12px 20px; display:flex; align-items:center; gap:12px;
+  font-size:13px;
+}
+.status-bar .sb-icon { width:32px; height:32px; border-radius:8px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.status-bar .sb-label { color:#64748b; font-size:11px; text-transform:uppercase; letter-spacing:.8px; margin-bottom:1px; }
+.status-bar .sb-value { color:#0f172a; font-weight:600; }
+.status-bar .sb-action { margin-left:auto; }
+
+/* ── Stat cards ─────────────────────────────────────── */
+.stat-card { background:#fff; border:1px solid #e2e8f0; border-radius:12px; padding:20px; }
+.stat-card .num  { font-size:30px; font-weight:700; color:#0f172a; line-height:1; }
+.stat-card .lbl  { font-size:12px; color:#64748b; margin-top:4px; }
+
+/* ── Site search ────────────────────────────────────── */
+.site-search-wrap { position:relative; }
+.site-search-input {
+  width:100%; border:1.5px solid #e2e8f0; border-radius:10px;
+  padding:11px 16px 11px 40px; font-size:14px; background:#fff;
+  outline:none; transition:border-color .15s;
+}
+.site-search-input:focus { border-color:var(--accent); }
+.site-search-icon { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:#94a3b8; width:16px; height:16px; }
+.site-dropdown {
+  position:absolute; top:calc(100% + 4px); left:0; right:0;
+  background:#fff; border:1px solid #e2e8f0; border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.1); z-index:200;
+  max-height:280px; overflow-y:auto; display:none;
+}
+.site-dropdown.open { display:block; }
+.site-drop-item {
+  display:flex; align-items:center; gap:10px;
+  padding:9px 14px; cursor:pointer; border-bottom:1px solid #f1f5f9;
+  font-size:13px;
+}
+.site-drop-item:last-child { border-bottom:none; }
+.site-drop-item:hover { background:#f8fafc; }
+.site-drop-item .s-name { font-weight:600; color:#0f172a; }
+.site-drop-item .s-dn   { color:#94a3b8; font-size:11px; font-family:monospace; }
+
+/* ── Site detail panel ──────────────────────────────── */
+#site-panel { display:none; }
+#site-panel.show { display:block; }
+
+.site-header {
+  background:#fff; border:1px solid #e2e8f0; border-radius:12px;
+  padding:16px 20px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+}
+.site-title { font-size:18px; font-weight:700; color:#0f172a; }
+.site-meta  { font-size:12px; color:#64748b; font-family:monospace; }
+.site-badges { display:flex; gap:6px; flex-wrap:wrap; margin-left:auto; }
+.sbadge {
+  border-radius:20px; padding:3px 10px; font-size:11px; font-weight:600;
+}
+.sbadge.connected    { background:#dcfce7; color:#15803d; }
+.sbadge.disconnected { background:#fee2e2; color:#b91c1c; }
+.sbadge.lithium      { background:#eff6ff; color:#1d4ed8; }
+.sbadge.vision       { background:#f0fdf4; color:#15803d; }
+.sbadge.tenant       { background:#f1f5f9; color:#475569; }
+
+/* ── Hardware cards ─────────────────────────────────── */
+.hw-card {
+  background:#fff; border:1px solid #e2e8f0; border-radius:12px;
+  overflow:hidden;
+}
+.hw-card .hw-header {
+  background:#f8fafc; border-bottom:1px solid #e2e8f0;
+  padding:12px 18px; display:flex; align-items:center; gap:8px;
+}
+.hw-card .hw-header h6 { margin:0; font-size:13px; font-weight:600; color:#374151; }
+.hw-card .hw-body { padding:16px 18px; }
+
+.hw-row { display:flex; justify-content:space-between; align-items:center; padding:5px 0; border-bottom:1px solid #f1f5f9; font-size:13px; }
+.hw-row:last-child { border-bottom:none; }
+.hw-row .hw-key { color:#64748b; }
+.hw-row .hw-val { font-weight:600; color:#0f172a; }
+
+.config-badge { background:#e0f2fe; color:#0369a1; border-radius:4px; padding:1px 6px; font-size:11px; }
+.config-pending { background:#fef3c7; color:#92400e; border-radius:4px; padding:1px 6px; font-size:11px; }
+
+/* ── DC Load panels ─────────────────────────────────── */
+.dc-load-panel { background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
+.dc-load-panel .dc-header {
+  background:#f8fafc; border-bottom:1px solid #e2e8f0;
+  padding:12px 18px; display:flex; align-items:center; gap:8px;
+}
+.dc-load-panel .dc-header h6 { margin:0; font-size:13px; font-weight:600; color:#374151; flex:1; }
+.dc-load-body { padding:16px 18px; }
+
+/* Per-tenant table inside DC Load card */
+.tenant-kw-table { width:100%; border-collapse:collapse; font-size:12px; margin-bottom:10px; }
+.tenant-kw-table th { color:#64748b; font-weight:600; padding:4px 8px; text-align:left; border-bottom:1px solid #e2e8f0; }
+.tenant-kw-table th:not(:first-child) { text-align:right; }
+.tenant-kw-table td { padding:5px 8px; border-bottom:1px solid #f1f5f9; }
+.tenant-kw-table td:not(:first-child) { text-align:right; font-family:monospace; font-size:12px; }
+.tenant-kw-table tr.total-row td { font-weight:700; color:#0f172a; border-top:2px solid #e2e8f0; border-bottom:none; }
+.tenant-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:5px; vertical-align:middle; }
+
+.progress-bar-wrap { background:#e2e8f0; border-radius:8px; height:8px; overflow:hidden; margin:8px 0; }
+.progress-bar-fill { height:8px; border-radius:8px; background:var(--accent); transition:width .3s; }
+
+.tenant-bar-row { display:flex; align-items:center; gap:10px; margin:6px 0; font-size:13px; }
+.tenant-bar-row .tb-name { width:60px; color:#374151; font-weight:600; text-align:right; flex-shrink:0; }
+.tenant-bar-row .tb-track { flex:1; background:#f1f5f9; border-radius:6px; height:18px; overflow:hidden; position:relative; }
+.tenant-bar-row .tb-fill  { height:18px; border-radius:6px; display:flex; align-items:center; padding:0 8px; font-size:11px; font-weight:600; color:#fff; white-space:nowrap; }
+.tenant-bar-row .tb-val   { width:70px; color:#64748b; text-align:right; flex-shrink:0; }
+
+.tenant-colors { }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Dashboard</h1>
+    <p>Energy system overview — Edotco NetEco NMS</p>
+  </div>
+  <div id="conn-badge" class="d-flex align-items-center gap-2">
+    <span class="status-dot idle" id="conn-dot"></span>
+    <span id="conn-text" style="font-size:13px;color:#64748b;">Checking…</span>
+  </div>
+</div>
+
+<div class="page-body">
+
+  <!-- ── Setup banner ────────────────────────────────── -->
+  {% if not configured %}
+  <div class="alert d-flex align-items-center gap-3 mb-4"
+       style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;">
+    <i data-feather="info" style="color:#3b82f6;width:18px;height:18px;flex-shrink:0;"></i>
+    <div><strong>Setup required.</strong> Configure your NetEco server before extracting data.
+      <a href="/setup" class="ms-2 btn btn-sm btn-primary">Go to Setup</a></div>
+  </div>
+  {% endif %}
+
+  <!-- ── Status bars ────────────────────────────────── -->
+  <div class="row g-3 mb-4">
+
+    <!-- NE Data freshness -->
+    <div class="col-12">
+      <div class="status-bar">
+        <div class="sb-icon" style="background:#eff6ff;">
+          <i data-feather="database" style="color:#3b82f6;width:16px;height:16px;"></i>
+        </div>
+        <div>
+          <div class="sb-label">NE Data</div>
+          <div class="sb-value" id="ne-freshness-text">Loading…</div>
+        </div>
+        <div class="sb-action">
+          <button class="btn btn-sm btn-outline-secondary" id="btn-refresh-ne"
+                  onclick="refreshNEData()" {% if not configured %}disabled{% endif %}>
+            <i data-feather="refresh-cw" style="width:12px;height:12px;"></i> Refresh
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Last LBB run -->
+    <div class="col-12">
+      <div class="status-bar" id="lbb-summary-bar">
+        <div class="sb-icon" style="background:#f0fdf4;">
+          <i data-feather="shield" style="color:#22c55e;width:16px;height:16px;"></i>
+        </div>
+        <div>
+          <div class="sb-label">Last LBB Validation</div>
+          <div class="sb-value" id="lbb-summary-text">Loading…</div>
+        </div>
+        <div class="sb-action">
+          <a href="/lbb-validation" class="btn btn-sm btn-outline-primary">Run Validation</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Stat cards ────────────────────────────────── -->
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md-4">
+      <div class="stat-card">
+        <div class="num">{{ stats.get('total_sites','—') | format_number if stats else '—' }}</div>
+        <div class="lbl">Total Sites</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4">
+      <div class="stat-card">
+        <div class="num" style="color:#3b82f6;">{{ stats.get('battery_groups','—') | format_number if stats else '—' }}</div>
+        <div class="lbl">Battery Groups</div>
+      </div>
+    </div>
+    <div class="col-6 col-md-4">
+      <div class="stat-card">
+        <div class="num" style="color:#8b5cf6;">{{ stats.get('rectifier_groups','—') | format_number if stats else '—' }}</div>
+        <div class="lbl">Rectifier Groups</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Site search ───────────────────────────────── -->
+  {% if has_data %}
+  <div class="card mb-4">
+    <div class="card-header">
+      <h6><i data-feather="search" style="width:14px;height:14px;"></i> Site Lookup</h6>
+    </div>
+    <div class="card-body p-3">
+      <div class="site-search-wrap">
+        <i data-feather="search" class="site-search-icon"></i>
+        <input type="text" id="site-search-input" class="site-search-input"
+               placeholder="Search by site name or EASI ID (e.g. BSGND02, e.coBD000165)…"
+               autocomplete="off">
+        <div id="site-dropdown" class="site-dropdown"></div>
+      </div>
+      <div id="search-hint" class="mt-2" style="font-size:12px;color:#94a3b8;">
+        Type at least 2 characters to search
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Site detail panel ─────────────────────────── -->
+  <div id="site-panel">
+
+    <!-- Site header row -->
+    <div class="site-header mb-3" id="site-header-bar">
+      <div>
+        <div class="site-title" id="sp-site-name">—</div>
+        <div class="site-meta" id="sp-site-dn">—</div>
+      </div>
+      <div class="site-badges" id="sp-badges"></div>
+    </div>
+
+    <!-- Hardware cards row -->
+    <div class="row g-3 mb-3">
+
+      <!-- Battery card -->
+      <div class="col-md-6">
+        <div class="hw-card h-100">
+          <div class="hw-header">
+            <i data-feather="battery-charging" style="width:14px;height:14px;color:#3b82f6;"></i>
+            <h6>Battery</h6>
+          </div>
+          <div class="hw-body" id="batt-card-body">
+            <div class="text-muted text-center py-3" style="font-size:13px;">Loading…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Rectifier card -->
+      <div class="col-md-6">
+        <div class="hw-card h-100">
+          <div class="hw-header">
+            <i data-feather="zap" style="width:14px;height:14px;color:#f59e0b;"></i>
+            <h6>Rectifier</h6>
+          </div>
+          <div class="hw-body" id="rect-card-body">
+            <div class="text-muted text-center py-3" style="font-size:13px;">Loading…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Last LBB claim for this site -->
+    <div class="hw-card mb-3" id="site-lbb-card" style="display:none;">
+      <div class="hw-header">
+        <i data-feather="file-text" style="width:14px;height:14px;color:#64748b;"></i>
+        <h6>Last LBB Claim (this site)</h6>
+      </div>
+      <div class="hw-body" id="site-lbb-body"></div>
+    </div>
+
+    <!-- 30-Day DC Load panel -->
+    <div class="dc-load-panel">
+      <div class="dc-header">
+        <i data-feather="activity" style="width:14px;height:14px;color:#22c55e;"></i>
+        <h6>30-Day DC Load</h6>
+        <button class="btn btn-sm btn-primary" id="btn-load-dc-30" onclick="startDCLoad(30)">
+          <i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load 30d Data
+        </button>
+      </div>
+      <div class="dc-load-body" id="dc-load-body-30">
+        <div style="padding:20px 18px;font-size:13px;color:#94a3b8;text-align:center;">
+          Click <strong>Load 30d Data</strong> to fetch 30-day load history from NetEco.
+        </div>
+      </div>
+    </div>
+
+    <!-- 90-Day DC Load panel -->
+    <div class="dc-load-panel" style="margin-top:16px;">
+      <div class="dc-header">
+        <i data-feather="activity" style="width:14px;height:14px;color:#a855f7;"></i>
+        <h6>90-Day DC Load</h6>
+        <button class="btn btn-sm btn-primary" id="btn-load-dc-90" onclick="startDCLoad(90)">
+          <i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load 90d Data
+        </button>
+      </div>
+      <div class="dc-load-body" id="dc-load-body-90">
+        <div style="padding:20px 18px;font-size:13px;color:#94a3b8;text-align:center;">
+          Click <strong>Load 90d Data</strong> to fetch 90-day load history from NetEco.
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /site-panel -->
+  {% endif %}
+
+</div>
+{% endblock %}
+
+
+{% block scripts %}
+<script>
+// ── Tenant colour palette ───────────────────────────────
+const TENANT_COLORS = {
+  "Robi": "#3b82f6", "GP": "#22c55e", "BL": "#f59e0b",
+  "TBL": "#a855f7", "Others": "#64748b", "Unknown": "#94a3b8",
+};
+function tenantColor(name) {
+  return TENANT_COLORS[name] || "#64748b";
+}
+
+// ── Connection status ──────────────────────────────────
+fetch("/api/connection-status").then(r => r.json()).then(d => {
+  const dot = document.getElementById("conn-dot");
+  const txt = document.getElementById("conn-text");
+  if (!d.configured) { dot.className = "status-dot idle"; txt.textContent = "Not configured"; return; }
+  if (d.connected)   { dot.className = "status-dot ok";   txt.textContent = "NetEco Connected"; }
+  else               { dot.className = "status-dot err";  txt.textContent = "Cannot reach NetEco"; }
+});
+
+// ── Dashboard status (freshness + LBB summary) ─────────
+fetch("/api/dashboard/status").then(r => r.json()).then(d => {
+  // NE freshness
+  const fr = d.freshness || {};
+  const freshEl = document.getElementById("ne-freshness-text");
+  if (fr.loaded_at) {
+    freshEl.textContent = `${(fr.count || 0).toLocaleString()} sites · Loaded ${fr.loaded_at}`;
+  } else {
+    freshEl.textContent = "No data loaded — use Setup to import NE tree";
+    freshEl.style.color = "#f59e0b";
+  }
+
+  // LBB summary
+  const lbb = d.lbb || {};
+  const lbbEl = document.getElementById("lbb-summary-text");
+  if (lbb.run_at) {
+    const flagColor = lbb.fail_count > 0 ? "#ef4444" : "#22c55e";
+    lbbEl.innerHTML = `${lbb.run_at} &nbsp;·&nbsp; ${lbb.total} site(s) &nbsp;·&nbsp;
+      <span style="color:#22c55e;">${lbb.pass_count}P</span>&nbsp;/&nbsp;
+      <span style="color:${flagColor};">${lbb.fail_count}F</span>&nbsp;/&nbsp;
+      <span style="color:#f59e0b;">${lbb.inc_count}?</span>
+      &nbsp;<span style="font-size:11px;color:#94a3b8;">(${lbb.mode || ''} mode)</span>`;
+  } else {
+    lbbEl.textContent = "No validation run yet";
+    lbbEl.style.color = "#94a3b8";
+  }
+});
+
+// ── NE Refresh ─────────────────────────────────────────
+function refreshNEData() {
+  const btn = document.getElementById("btn-refresh-ne");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Refreshing…';
+  showLoading("Refreshing NE tree from NetEco…");
+  fetch("/api/refresh-ne-tree", { method: "POST" })
+    .then(r => r.json())
+    .then(d => {
+      hideLoading();
+      btn.disabled = false;
+      btn.innerHTML = '<i data-feather="refresh-cw" style="width:12px;height:12px;"></i> Refresh';
+      feather.replace();
+      if (d.success) {
+        toast(d.message, "success");
+        setTimeout(() => location.reload(), 800);
+      } else {
+        toast(d.message || "Refresh failed", "error");
+      }
+    })
+    .catch(() => {
+      hideLoading();
+      btn.disabled = false;
+      btn.innerHTML = '<i data-feather="refresh-cw" style="width:12px;height:12px;"></i> Refresh';
+      feather.replace();
+      toast("Refresh failed", "error");
+    });
+}
+
+// ── Site search ────────────────────────────────────────
+let _searchTimer = null;
+let _currentSiteDn = null;
+let _currentHardware = null;
+let _configLoaded = false;
+let _lastLBBResults = null;   // populated from last validation run (session storage)
+
+const inp = document.getElementById("site-search-input");
+const ddEl = document.getElementById("site-dropdown");
+if (inp) {
+  inp.addEventListener("input", () => {
+    clearTimeout(_searchTimer);
+    const q = inp.value.trim();
+    if (q.length < 2) { ddEl.classList.remove("open"); return; }
+    _searchTimer = setTimeout(() => {
+      fetch(`/api/search-sites?q=${encodeURIComponent(q)}`)
+        .then(r => r.json())
+        .then(sites => renderDropdown(sites));
+    }, 200);
+  });
+
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Escape") ddEl.classList.remove("open");
+  });
+
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".site-search-wrap")) ddEl.classList.remove("open");
+  });
+}
+
+function renderDropdown(sites) {
+  if (!sites || !sites.length) {
+    ddEl.innerHTML = `<div class="site-drop-item"><span style="color:#94a3b8;">No sites found</span></div>`;
+    ddEl.classList.add("open");
+    return;
+  }
+  ddEl.innerHTML = sites.map(s => `
+    <div class="site-drop-item" onclick="selectSite(${JSON.stringify(s.dn).replace(/"/g,'&quot;')}, ${JSON.stringify(s.name).replace(/"/g,'&quot;')}, '${s.status}')">
+      <span class="status-dot ${s.status === 'CONNECTED' ? 'ok' : 'idle'}" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></span>
+      <div>
+        <div class="s-name">${s.name}</div>
+        <div class="s-dn">${s.dn}</div>
+      </div>
+    </div>`).join("");
+  ddEl.classList.add("open");
+}
+
+// ── Select site ────────────────────────────────────────
+function selectSite(dn, name, status) {
+  ddEl.classList.remove("open");
+  inp.value = name;
+  _currentSiteDn = dn;
+  _configLoaded = false;
+  document.getElementById("site-panel").classList.add("show");
+  document.getElementById("sp-site-name").textContent = name;
+  document.getElementById("sp-site-dn").textContent = dn;
+  document.getElementById("batt-card-body").innerHTML = `<div class="text-muted text-center py-3" style="font-size:13px;"><span class="spinner-border spinner-border-sm me-1"></span>Loading…</div>`;
+  document.getElementById("rect-card-body").innerHTML = `<div class="text-muted text-center py-3" style="font-size:13px;"><span class="spinner-border spinner-border-sm me-1"></span>Loading…</div>`;
+  document.getElementById("site-lbb-card").style.display = "none";
+  _systemBatteryAhMap = {};
+  // Reset both DC load panels when switching sites
+  [30, 90].forEach(days => {
+    if (_dcEventSources[days]) { _dcEventSources[days].close(); delete _dcEventSources[days]; }
+    if (_dcCharts[days])       { _dcCharts[days].destroy();     delete _dcCharts[days]; }
+    const body = document.getElementById(`dc-load-body-${days}`);
+    if (body) body.innerHTML = `<div style="padding:20px 18px;font-size:13px;color:#94a3b8;text-align:center;">
+      Click <strong>Load ${days}d Data</strong> to fetch load history from NetEco.</div>`;
+    const btn = document.getElementById(`btn-load-dc-${days}`);
+    if (btn) { btn.disabled = false; btn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load ${days}d Data`; }
+  });
+  feather.replace();
+
+  // Render status badge
+  const badges = document.getElementById("sp-badges");
+  badges.innerHTML = `<span class="sbadge ${status === 'CONNECTED' ? 'connected' : 'disconnected'}">${status}</span>`;
+
+  fetch(`/api/site/hardware?site_dn=${encodeURIComponent(dn)}`)
+    .then(r => r.json())
+    .then(hw => {
+      if (hw.error) {
+        document.getElementById("batt-card-body").innerHTML = `<div class="text-danger">${hw.error}</div>`;
+        return;
+      }
+      _currentHardware = hw;
+      renderHardwareCards(hw);
+      renderSiteHeaderBadges(hw, badges, status);
+      loadLastLBBClaim(name);
+    });
+}
+
+function renderSiteHeaderBadges(hw, badges, status) {
+  let html = `<span class="sbadge ${status === 'CONNECTED' ? 'connected' : 'disconnected'}">${status}</span>`;
+  if (hw.vision_unit_count > 0) {
+    html += `<span class="sbadge vision">Vision LiFePO4 (${hw.vision_unit_count})</span>`;
+  } else {
+    html += `<span class="sbadge lithium">Lithium</span>`;
+  }
+  hw.controllers.forEach(c => {
+    if (c.tenant_code) {
+      html += `<span class="sbadge tenant">${c.tenant_code}</span>`;
+    }
+  });
+  badges.innerHTML = html;
+}
+
+// ── Render hardware cards (topology from cache) ──────────
+function renderHardwareCards(hw) {
+  // Battery card
+  let bHtml = "";
+  bHtml += row("Battery Groups", hw.battery_group_count);
+  bHtml += row("Battery Strings", hw.battery_string_count || "—");
+  if (hw.vision_unit_count > 0) {
+    bHtml += row("Vision LiFePO4 Units", `<span class="sbadge vision">${hw.vision_unit_count}</span>`);
+  }
+  // List each group
+  if (hw.battery_groups && hw.battery_groups.length) {
+    bHtml += `<div style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;">`;
+    hw.battery_groups.forEach(bg => {
+      bHtml += `<div style="font-size:12px;color:#64748b;padding:2px 0;">
+        <span class="status-dot ${bg.status==='CONNECTED'?'ok':'idle'}" style="width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px;"></span>
+        ${bg.name} — ${bg.string_count} string(s)
+      </div>`;
+    });
+    bHtml += `</div>`;
+  }
+  bHtml += `<div style="margin-top:12px;">
+    <div id="batt-config-area">
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">Capacity data requires config fetch from NetEco</div>
+      <button class="btn btn-sm btn-outline-primary" onclick="loadHardwareConfig()">
+        <i data-feather="download" style="width:12px;height:12px;"></i> Load Config
+      </button>
+    </div>
+  </div>`;
+  document.getElementById("batt-card-body").innerHTML = bHtml;
+
+  // Rectifier card
+  let rHtml = "";
+  rHtml += row("Rectifier Groups", hw.rectifier_group_count);
+  rHtml += row("Rectifier Modules", hw.rectifier_module_count || "—");
+  // Controller models
+  const models = [...new Set(hw.controllers.map(c => c.model).filter(Boolean))];
+  if (models.length) {
+    rHtml += row("Controller Model", models.join(", "));
+  }
+  if (hw.rectifier_groups && hw.rectifier_groups.length) {
+    rHtml += `<div style="margin-top:10px;border-top:1px solid #f1f5f9;padding-top:10px;">`;
+    hw.rectifier_groups.forEach(rg => {
+      rHtml += `<div style="font-size:12px;color:#64748b;padding:2px 0;">
+        <span class="status-dot ${rg.status==='CONNECTED'?'ok':'idle'}" style="width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px;"></span>
+        ${rg.name} — ${rg.module_count} module(s)
+      </div>`;
+    });
+    rHtml += `</div>`;
+  }
+  rHtml += `<div style="margin-top:12px;">
+    <div id="rect-config-area">
+      <div style="font-size:12px;color:#94a3b8;margin-bottom:6px;">Capacity &amp; model data requires config fetch</div>
+      <button class="btn btn-sm btn-outline-primary" onclick="loadHardwareConfig()">
+        <i data-feather="download" style="width:12px;height:12px;"></i> Load Config
+      </button>
+    </div>
+  </div>`;
+  document.getElementById("rect-card-body").innerHTML = rHtml;
+  feather.replace();
+}
+
+function row(key, val) {
+  return `<div class="hw-row"><span class="hw-key">${key}</span><span class="hw-val">${val}</span></div>`;
+}
+
+// ── Load hardware config from NetEco ──────────────────
+function loadHardwareConfig() {
+  if (!_currentHardware) return;
+  if (_configLoaded) { toast("Config already loaded", "info"); return; }
+  const hw = _currentHardware;
+
+  // Disable both Load Config buttons
+  document.querySelectorAll("#batt-card-body button, #rect-card-body button").forEach(b => {
+    b.disabled = true;
+    b.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Fetching…`;
+  });
+
+  const payload = {
+    site_dn:             hw.site_dn,
+    battery_group_dns:   hw.battery_groups.map(b => b.dn),
+    rectifier_group_dns: hw.rectifier_groups.map(r => r.dn),
+    vision_dns:          hw.vision_units.map(v => v.dn),
+    rectifier_dns:       hw.rectifier_dns || [],        // individual Rectifier NEs → signal 10014 (R48xxx)
+    site_unit_dns:       hw.site_unit_dns || [],        // Site Unit NEs → signal 2101653 (ETP48xxx)
+  };
+
+  fetch("/api/site/hardware/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  })
+    .then(r => r.json())
+    .then(cfg => {
+      if (cfg.error) { toast("Config fetch failed: " + cfg.error, "error"); return; }
+      _configLoaded = true;
+      // Debug: log key fields to browser console for troubleshooting
+      console.debug("[HW Config] site_units:", hw.site_units);
+      console.debug("[HW Config] site_unit_dns:", hw.site_unit_dns);
+      console.debug("[HW Config] site_unit_sampling (incl. RG fallback):", cfg.site_unit_sampling);
+      console.debug("[HW Config] rectifier_dns:", hw.rectifier_dns);
+      console.debug("[HW Config] rectifier_module_sampling:", cfg.rectifier_module_sampling);
+      applyConfigToBatteryCard(hw, cfg);
+      applyConfigToRectCard(hw, cfg);
+      feather.replace();
+    })
+    .catch(() => toast("Config fetch failed", "error"));
+}
+
+// ── System prefix helpers ─────────────────────────────────────────
+// Mirrors ne_tree._site_prefix / _extract_tenant logic.
+// E.g. "CMSDR34_Huawei01_Int_Intelligent_Rect_Battery Group" → "CMSDR34"
+//      "CTG_R2106_Huawei02_Int_BL01_Battery Group"           → "CTG_R2106"
+function sysPrefix(name) {
+  const intIdx = name.indexOf("_Int_");
+  const before = intIdx >= 0 ? name.substring(0, intIdx) : name;
+  const parts  = before.split("_");
+  // Strip trailing vendor token (ends with digit, not purely numeric e.g. Huawei01, ZTE02)
+  if (parts.length > 1) {
+    const last = parts[parts.length - 1];
+    if (/\d$/.test(last) && isNaN(+last)) parts.pop();
+  }
+  return parts.join("_") || before.split("_")[0] || "";
+}
+
+function applyConfigToBatteryCard(hw, cfg) {
+  const bCfg   = cfg.battery_config || {};
+  const bgSamp = cfg.battery_group_sampling || {};  // signal 10013 per Battery Group DN → total capacity Ah
+  const vCfg   = cfg.vision_config || {};
+
+  let bHtml = "";
+  bHtml += row("Battery Groups", hw.battery_group_count);
+  bHtml += row("Battery Strings", hw.battery_string_count || "—");
+  if (hw.vision_unit_count > 0) {
+    bHtml += row("Vision LiFePO4 Units", `<span class="sbadge vision">${hw.vision_unit_count}</span>`);
+  }
+
+  // Aggregate total rated capacity
+  let totalAh = 0;
+  let anyCapacity = false;
+  _systemBatteryAhMap = {};   // reset and rebuild per battery group
+
+  hw.battery_groups.forEach(bg => {
+    const sigs    = bCfg[bg.dn] || {};
+    const sampSig = bgSamp[bg.dn] || {};
+
+    const totalCap = parseFloat(sigs[20037]);      // config: rated total Ah
+    const strCap   = parseFloat(sigs[20035]);      // config: rated Ah/string
+    const liveCap  = parseFloat(sampSig[10013]);   // sampling: actual total capacity Ah
+
+    // Use live capacity (10013) if available, fall back to config (20037) for the total
+    const capForTotal = !isNaN(liveCap) && liveCap > 0 ? liveCap
+                      : !isNaN(totalCap) && totalCap > 0 ? totalCap : NaN;
+    if (!isNaN(capForTotal)) {
+      totalAh += capForTotal;
+      anyCapacity = true;
+      // Map to system prefix — each battery group belongs to exactly one rectifier system
+      const pfx = sysPrefix(bg.name);
+      if (pfx) _systemBatteryAhMap[pfx] = (_systemBatteryAhMap[pfx] || 0) + capForTotal;
+    }
+
+    bHtml += `<div style="font-size:12px;color:#374151;margin-top:6px;padding:6px 8px;background:#f8fafc;border-radius:6px;">
+      <div style="font-weight:600;margin-bottom:3px;">${bg.name}</div>
+      <div style="color:#64748b;line-height:1.8;">
+        ${bg.string_count} string(s)${!isNaN(strCap) && strCap > 0 ? ` · ${strCap} Ah/string` : ''}
+        ${!isNaN(liveCap) && liveCap > 0
+          ? `<br><span style="color:#15803d;">Total capacity: </span><span style="font-family:monospace;font-weight:600;color:#166534;">${liveCap.toLocaleString()} Ah</span>`
+          : !isNaN(totalCap) && totalCap > 0
+            ? `<br><span style="color:#64748b;">Rated capacity: </span><span style="font-family:monospace;font-weight:600;color:#0f172a;">${totalCap.toLocaleString()} Ah</span>`
+            : ''}
+      </div>
+    </div>`;
+  });
+
+  // Vision capacity
+  hw.vision_units.forEach(v => {
+    const sigs = vCfg[v.dn] || {};
+    const cap = parseFloat(sigs[538976260]);
+    if (!isNaN(cap) && cap > 0) { totalAh += cap; anyCapacity = true; }
+  });
+
+  if (anyCapacity) {
+    bHtml = row("Total Battery Capacity", `<strong>${totalAh.toLocaleString()} Ah</strong>`) + bHtml;
+    // Note: _systemBatteryAhMap built per-group above — do not aggregate into one total
+  }
+
+  document.getElementById("batt-card-body").innerHTML = bHtml;
+}
+
+function applyConfigToRectCard(hw, cfg) {
+  const rCfg      = cfg.rectifier_config || {};
+  const modSamp   = cfg.rectifier_module_sampling || {};  // signal 10014 per Rectifier DN → R48xxx
+  // site_unit_sampling now contains signal 2101653 keyed by BOTH Site Unit DNs (ETP48xxx)
+  // AND Rectifier Group DNs (TP48300B / other cabinet types).
+  const suSamp    = cfg.site_unit_sampling || {};
+
+  // ── Core model lookup (signal 2101653 = "System Type") ──────────
+  // Priority: Site Unit DN (ETP48) → Rectifier Group DN (TP48300B / others)
+  // Site-wide summary: collect unique non-empty values across all sources.
+  const coreModelSet = new Set();
+  // From Site Unit NEs (ETP48)
+  (hw.site_units || []).forEach(su => {
+    const v = ((suSamp[su.dn] || {})[2101653] || "").trim();
+    if (v) coreModelSet.add(v);
+  });
+  // From Rectifier Group NEs (TP48300B and other types)
+  (hw.rectifier_groups || []).forEach(rg => {
+    const v = ((suSamp[rg.dn] || {})[2101653] || "").trim();
+    if (v) coreModelSet.add(v);
+  });
+  const coreModels = [...coreModelSet];
+
+  // ── R48xxx — Module Model from individual Rectifier signal 10014 ─
+  const moduleModelSet = new Set();
+  (hw.rectifier_dns || []).forEach(dn => {
+    const m = ((modSamp[dn] || {})[10014] || "").trim();
+    if (m) moduleModelSet.add(m);
+  });
+  const moduleModels = [...moduleModelSet];
+
+  // ── Group-level config ─────────────────────────────────────────
+  let totalCapA = 0;
+  let rHtml = "";
+
+  const ctrlModels = [...new Set(hw.controllers.map(c => c.model).filter(Boolean))];
+  if (ctrlModels.length) rHtml += row("Controller Model", ctrlModels.join(", "));
+  rHtml += row("Rectifier Groups",  hw.rectifier_group_count);
+  rHtml += row("Rectifier Modules", hw.rectifier_module_count || "—");
+
+  hw.rectifier_groups.forEach(rg => {
+    const sigs = rCfg[rg.dn] || {};
+    const capA = parseFloat(sigs[20007]);
+    if (!isNaN(capA) && capA > 0) totalCapA += capA;
+
+    // Per-group R48 module models (from individual Rectifier NE DNs)
+    const rgModels = new Set();
+    (rg.module_dns || []).forEach(mdn => {
+      const mm = ((modSamp[mdn] || {})[10014] || "").trim();
+      if (mm) rgModels.add(mm);
+    });
+
+    // Per-group core model — signal 2101653.
+    // Try site_unit_dn first (ETP48), fall back to rg.dn directly (TP48300B / others).
+    let rgCore = rg.site_unit_dn ? ((suSamp[rg.site_unit_dn] || {})[2101653] || "").trim() : "";
+    if (!rgCore) rgCore = ((suSamp[rg.dn] || {})[2101653] || "").trim();
+
+    rHtml += `<div style="font-size:12px;color:#374151;margin-top:6px;padding:6px 8px;background:#f8fafc;border-radius:6px;">
+      <div style="font-weight:600;margin-bottom:3px;">${rg.name}</div>
+      <div style="color:#64748b;line-height:1.8;">
+        ${rg.module_count} module(s)${!isNaN(capA) && capA > 0 ? ` · ${capA} A` : ''}
+        <br><span style="color:#6b21a8;">Core model: </span><span style="font-family:monospace;font-weight:600;color:${rgCore ? '#7c3aed' : '#94a3b8'};">${rgCore || '—'}</span>
+        ${rgModels.size ? `<br><span style="color:#6b21a8;">Module model: </span><span style="color:#1d4ed8;font-family:monospace;font-weight:600;">${[...rgModels].join(", ")}</span>` : ''}
+      </div>
+    </div>`;
+  });
+
+  // ── Prepend summary rows (most important first) ────────────────
+  if (moduleModels.length) {
+    rHtml = row("Module Model (R48)",
+      `<span style="font-family:monospace;font-weight:600;color:#1d4ed8;">${moduleModels.join(", ")}</span>`) + rHtml;
+  }
+  if (coreModels.length) {
+    rHtml = row("Core Model",
+      `<span style="font-family:monospace;font-weight:700;color:#7c3aed;">${coreModels.join(", ")}</span>`) + rHtml;
+  }
+  if (totalCapA > 0) rHtml = row("Total Rated Current", `<strong>${totalCapA} A</strong>`) + rHtml;
+
+  document.getElementById("rect-card-body").innerHTML = rHtml;
+}
+
+// ── Last LBB Claim for site ────────────────────────────
+function loadLastLBBClaim(siteName) {
+  // Try to read last validation results from sessionStorage
+  try {
+    const raw = sessionStorage.getItem("lbb_last_results");
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    const results = data.results || [];
+    // Match by site name (partial)
+    const match = results.find(r =>
+      (r.site_name || "").includes(siteName) || siteName.includes(r.site_name || "xxxxx")
+    );
+    if (!match) return;
+
+    const card = document.getElementById("site-lbb-card");
+    const body = document.getElementById("site-lbb-body");
+    const verdict = match.verdict || "Unknown";
+    const vColor = verdict.startsWith("Pass") ? "#22c55e" : verdict.startsWith("Fail") ? "#ef4444" : "#f59e0b";
+
+    body.innerHTML = `
+      <div class="hw-row">
+        <span class="hw-key">Verdict</span>
+        <span class="hw-val" style="color:${vColor};">${verdict}</span>
+      </div>
+      <div class="hw-row">
+        <span class="hw-key">Incident Time (BDT)</span>
+        <span class="hw-val">${match.incident_time || "—"}</span>
+      </div>
+      <div class="hw-row">
+        <span class="hw-key">Claimed BB (hrs)</span>
+        <span class="hw-val">${match.bbut_sla_hrs ?? "—"}</span>
+      </div>
+      <div class="hw-row">
+        <span class="hw-key">Actual Backup (hrs)</span>
+        <span class="hw-val">${match.actual_backup_hrs ?? "—"}</span>
+      </div>`;
+    card.style.display = "";
+  } catch (e) { /* silent */ }
+}
+
+// ── DC Load SSE — generic, supports both 30d and 90d ─────────────
+const _dcEventSources  = {};   // keyed by days (30, 90)
+const _dcCharts        = {};   // Chart.js instances keyed by days
+const _dcLastResult    = {};   // last done payload keyed by days — for DoD re-render
+// Per-system battery Ah — keyed by system prefix (e.g. "CMSDR34", "CTG_R2106").
+// Each rectifier NE has its own dedicated battery bank — do NOT sum across systems.
+let   _systemBatteryAhMap = {};   // set when hardware config loads
+
+function startDCLoad(days) {
+  if (!_currentSiteDn) return;
+  const bodyId = `dc-load-body-${days}`;
+  const btnId  = `btn-load-dc-${days}`;
+  const btn    = document.getElementById(btnId);
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Loading…`;
+
+  // Destroy old chart if re-loading
+  if (_dcCharts[days]) { _dcCharts[days].destroy(); _dcCharts[days] = null; }
+
+  document.getElementById(bodyId).innerHTML = `
+    <div style="padding:16px 18px;">
+      <div style="font-size:12px;color:#64748b;margin-bottom:6px;" id="dc-prog-lbl-${days}">Connecting…</div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="dc-prog-bar-${days}" style="width:0%;"></div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:4px;" id="dc-prog-chk-${days}">Chunk 0 / 0</div>
+    </div>`;
+
+  // Close previous stream for this days-slot if any
+  if (_dcEventSources[days]) { _dcEventSources[days].close(); }
+
+  const url = `/api/site/dc-load?site_dn=${encodeURIComponent(_currentSiteDn)}&days=${days}`;
+  const es  = new EventSource(url);
+  _dcEventSources[days] = es;
+
+  es.onmessage = (evt) => {
+    try {
+      const d = JSON.parse(evt.data);
+
+      if (d.error) {
+        es.close();
+        document.getElementById(bodyId).innerHTML =
+          `<div style="padding:20px 18px;color:#ef4444;font-size:13px;">${d.error}</div>`;
+        btn.disabled = false;
+        btn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Retry`;
+        feather.replace(); return;
+      }
+
+      if (d.progress !== undefined) {
+        const bar = document.getElementById(`dc-prog-bar-${days}`);
+        const lbl = document.getElementById(`dc-prog-lbl-${days}`);
+        const chk = document.getElementById(`dc-prog-chk-${days}`);
+        if (bar) bar.style.width = d.progress + "%";
+        if (lbl) lbl.textContent = `Fetching data… ${d.progress}%`;
+        if (chk) chk.textContent = `Chunk ${d.chunk} / ${d.total}`;
+      }
+
+      if (d.done) {
+        es.close();
+        _dcLastResult[days] = d;
+        renderDCLoadResults(d, days);
+        btn.disabled = false;
+        btn.innerHTML = `<i data-feather="refresh-cw" style="width:12px;height:12px;"></i> Refresh`;
+        feather.replace();
+      }
+    } catch (e) { /* ignore parse errors */ }
+  };
+
+  es.onerror = () => {
+    es.close();
+    document.getElementById(bodyId).innerHTML =
+      `<div style="padding:20px 18px;color:#ef4444;font-size:13px;">Connection error. Please try again.</div>`;
+    btn.disabled = false;
+    btn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load ${days}d Data`;
+    feather.replace();
+  };
+}
+
+// ── Backup hour helpers ────────────────────────────────────────────
+function backupHours(totalLoadKw, battAh, dod) {
+  if (!totalLoadKw || totalLoadKw <= 0 || !battAh || battAh <= 0) return null;
+  return (battAh * 48 * dod * 0.9) / (totalLoadKw * 1000);
+}
+
+function backupBadge(h) {
+  if (h === null) return `<span style="color:#94a3b8;font-size:12px;">—</span>`;
+  const label = h.toFixed(1) + " h";
+  if (h >= 6) return `<span style="background:#dcfce7;color:#166534;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:600;">${label}</span>`;
+  if (h >= 4) return `<span style="background:#dbeafe;color:#1e40af;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:600;">${label}</span>`;
+  return       `<span style="background:#fef9c3;color:#854d0e;border-radius:20px;padding:2px 8px;font-size:11px;font-weight:600;">${label}</span>`;
+}
+
+function renderDCLoadResults(d, days, dod) {
+  const ts            = d.tenant_stats  || {};   // flat, used for chart
+  const perSystem     = d.per_system    || {};   // system → {tenant → {avg_kw, peak_kw}}
+  const systemTotals  = d.system_totals || {};   // system → {avg_kw, peak_kw} incl. Others
+  const totalAvg      = d.total_avg_kw  || 0;
+  const totalPeak     = d.total_peak_kw || 0;
+  const readings      = d.readings || 0;
+  const neDebug       = d.ne_debug || [];
+  const bodyId        = `dc-load-body-${days}`;
+  const chartId       = `dc-load-chart-${days}`;
+  const dodId         = `dc-dod-${days}`;
+
+  // Use passed dod or read from existing dropdown if re-rendering
+  if (dod === undefined) {
+    const existingDod = document.getElementById(dodId);
+    dod = existingDod ? parseFloat(existingDod.value) : 0.8;
+  }
+
+  // Flat tenant list (for chart — merged across systems)
+  const ORDER = ["Robi", "GP", "BL", "TBL"];
+  const tenants = [
+    ...ORDER.filter(t => ts[t]),
+    ...Object.keys(ts).filter(t => !ORDER.includes(t) && t !== "Others" && t !== "Unknown"),
+    ...(ts["Others"]  ? ["Others"]  : []),
+    ...(ts["Unknown"] ? ["Unknown"] : []),
+  ];
+
+  const qr          = d.query_range || {};
+  const noData      = readings === 0;
+  const hasBattMap  = Object.keys(_systemBatteryAhMap).length > 0;
+  const systemKeys  = Object.keys(perSystem).sort();
+
+  // Resolve battery Ah for a system prefix.
+  // Falls back gracefully when battery group NEs have generic names (e.g. "Battery Group"
+  // with no site prefix) — in that case sysPrefix() stored the Ah under a key that doesn't
+  // match the DC-load system prefix (e.g. "CMBRR02"). Two fallback rules:
+  //   1. Single entry in map → use it (site has one battery bank, unambiguous)
+  //   2. Partial prefix match (one key is a prefix of the other)
+  function getBattAhForSystem(sys) {
+    if (!hasBattMap) return null;
+    if (_systemBatteryAhMap[sys]) return _systemBatteryAhMap[sys];
+    const keys = Object.keys(_systemBatteryAhMap);
+    if (keys.length === 1) return _systemBatteryAhMap[keys[0]];   // single bank, use it
+    for (const k of keys) {
+      if (sys.startsWith(k) || k.startsWith(sys)) return _systemBatteryAhMap[k];
+    }
+    return null;
+  }
+
+  const anyBattAh = hasBattMap && systemKeys.some(s => getBattAhForSystem(s) !== null);
+
+  let html = `<div style="padding:14px 16px;">`;
+
+  if (noData) {
+    html += `<div style="padding:12px;background:#fef9c3;border:1px solid #fde047;border-radius:6px;font-size:12px;color:#92400e;margin-bottom:8px;">
+      No historical readings returned for the ${days}-day window (signal ${qr.signal || 30003} on ${d.source || '?'}).
+      This may mean the API does not store historical data for this NE type.
+    </div>`;
+  }
+
+  // ── DoD control row ──
+  if (!noData && systemKeys.length > 0) {
+    let battNote;
+    if (anyBattAh) {
+      const sysSummary = Object.entries(_systemBatteryAhMap)
+        .map(([s, ah]) => `${s}: <strong>${ah.toLocaleString()} Ah</strong>`)
+        .join(" · ");
+      battNote = `${sysSummary} · 48V · 90% ageing`;
+    } else {
+      battNote = `<span style="color:#f59e0b;">Load hardware config to see backup estimates</span>`;
+    }
+    html += `<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:#64748b;flex-wrap:wrap;">
+      <label for="${dodId}" style="white-space:nowrap;">Depth of discharge</label>
+      <select id="${dodId}" onchange="rerenderDCLoad(${days})"
+              style="font-size:12px;padding:3px 8px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;">
+        <option value="0.8" ${dod===0.8?'selected':''}>80%</option>
+        <option value="0.9" ${dod===0.9?'selected':''}>90%</option>
+      </select>
+      <span>${battNote}</span>
+    </div>`;
+  }
+
+  // ── Per-system grouped table ──
+  // Each system section shows all its tenants (Robi, GP, Others/cooling…).
+  // Backup hour = (system_battery / system_total_load) — same for every row in the system,
+  // because when mains fail the battery supplies ALL loads simultaneously.
+  if (systemKeys.length > 0 && !noData) {
+    const showBackup = anyBattAh;
+    const cols = showBackup ? 5 : 3;
+
+    html += `<table class="tenant-kw-table">
+      <thead><tr>
+        <th>Tenant</th><th>Avg kW</th><th>Peak kW</th>
+        ${showBackup ? `<th>Backup (avg)</th><th>Backup (peak)</th>` : ''}
+      </tr></thead><tbody>`;
+
+    systemKeys.forEach(sys => {
+      const sysData   = perSystem[sys] || {};
+      const battAh    = getBattAhForSystem(sys);
+      const sysLoad   = systemTotals[sys] || {};
+      const sysAvgKw  = sysLoad.avg_kw  || 0;
+      const sysPeakKw = sysLoad.peak_kw || 0;
+      // All tenants in this system share the same backup hour (same battery, same total load)
+      const bAvg  = backupHours(sysAvgKw,  battAh, dod);
+      const bPeak = backupHours(sysPeakKw, battAh, dod);
+
+      // Sort tenants within this system: MNO first, Others last
+      const sysTenants = [
+        ...ORDER.filter(t => sysData[t]),
+        ...Object.keys(sysData).filter(t => !ORDER.includes(t) && t !== "Others" && t !== "Unknown"),
+        ...(sysData["Others"]  ? ["Others"]  : []),
+        ...(sysData["Unknown"] ? ["Unknown"] : []),
+      ];
+
+      // System header row
+      const battLabel  = battAh ? `${battAh.toLocaleString()} Ah` : '—';
+      html += `<tr style="background:#f1f5f9;">
+        <td colspan="${cols}" style="padding:5px 8px;font-size:11px;color:#475569;">
+          <strong style="color:#0f172a;">${sys}</strong>
+          <span style="margin-left:8px;">Battery: <strong>${battLabel}</strong></span>
+          <span style="margin-left:8px;color:#64748b;">Total load: ${sysAvgKw.toFixed(2)} kW avg / ${sysPeakKw.toFixed(2)} kW peak</span>
+          ${showBackup && bAvg !== null ? `<span style="margin-left:8px;">→ ${backupBadge(bAvg)} avg / ${backupBadge(bPeak)} peak</span>` : ''}
+        </td>
+      </tr>`;
+
+      sysTenants.forEach(t => {
+        const s     = sysData[t] || {};
+        const color = tenantColor(t);
+        html += `<tr>
+          <td style="padding-left:20px;"><span class="tenant-dot" style="background:${color};"></span><strong>${t}</strong></td>
+          <td>${(s.avg_kw  || 0).toFixed(2)}</td>
+          <td style="color:#ef4444;">${(s.peak_kw || 0).toFixed(2)}</td>
+          ${showBackup ? `<td>${bAvg  !== null ? backupBadge(bAvg)  : '<span style="color:#94a3b8;">—</span>'}</td>
+                         <td>${bPeak !== null ? backupBadge(bPeak) : '<span style="color:#94a3b8;">—</span>'}</td>` : ''}
+        </tr>`;
+      });
+    });
+
+    // Grand total
+    html += `<tr class="total-row">
+      <td>Grand Total</td>
+      <td>${totalAvg.toFixed(2)}</td>
+      <td style="color:#ef4444;">${totalPeak.toFixed(2)}</td>
+      ${showBackup ? `<td colspan="2" style="color:#94a3b8;font-size:11px;text-align:center;">see systems above</td>` : ''}
+    </tr>`;
+
+    html += `</tbody></table>`;
+
+    // Legend
+    if (showBackup) {
+      html += `<div style="font-size:11px;color:#94a3b8;margin:4px 0 8px;">
+        <span style="background:#dcfce7;color:#166534;border-radius:10px;padding:1px 7px;font-size:10px;">≥ 6 h</span> &nbsp;
+        <span style="background:#dbeafe;color:#1e40af;border-radius:10px;padding:1px 7px;font-size:10px;">4–6 h</span> &nbsp;
+        <span style="background:#fef9c3;color:#854d0e;border-radius:10px;padding:1px 7px;font-size:10px;">&lt; 4 h</span>
+      </div>`;
+    }
+
+    // ── Chart ──
+    html += `<div style="position:relative;height:${Math.max(100, tenants.length * 44 + 40)}px;">
+      <canvas id="${chartId}"></canvas>
+    </div>`;
+  }
+
+  // ── NE debug (collapsible) ──
+  if (neDebug.length > 0) {
+    const debugId = `dc-debug-${days}`;
+    const noReadings = neDebug.filter(n => n.readings === 0);
+    const warningIcon = noReadings.length > 0
+      ? `<span style="color:#f59e0b;margin-right:4px;">⚠ ${noReadings.length} NE(s) returned no data</span>`
+      : `<span style="color:#22c55e;margin-right:4px;">✓ All NEs have data</span>`;
+    html += `<details style="margin-top:8px;">
+      <summary style="font-size:11px;color:#64748b;cursor:pointer;list-style:none;">
+        ${warningIcon}<span style="text-decoration:underline dotted;">NE details (${neDebug.length})</span>
+      </summary>
+      <div style="margin-top:6px;overflow-x:auto;">
+        <table style="font-size:10px;width:100%;border-collapse:collapse;font-family:monospace;">
+          <thead><tr style="background:#f8fafc;">
+            <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;">Name</th>
+            <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;">Type</th>
+            <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #e2e8f0;">Readings</th>
+            <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;">Tenant</th>
+            <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;">System</th>
+          </tr></thead><tbody>`;
+    neDebug.forEach(n => {
+      const rowStyle = n.readings === 0 ? 'background:#fef9c3;' : '';
+      html += `<tr style="${rowStyle}">
+        <td style="padding:2px 6px;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${n.name}">${n.name}</td>
+        <td style="padding:2px 6px;color:#64748b;">${n.type}</td>
+        <td style="padding:2px 6px;text-align:right;${n.readings===0?'color:#ef4444;font-weight:600;':''}">${n.readings.toLocaleString()}</td>
+        <td style="padding:2px 6px;color:#374151;">${n.tenant || '—'}</td>
+        <td style="padding:2px 6px;color:#64748b;">${n.system || '—'}</td>
+      </tr>`;
+    });
+    html += `</tbody></table></div></details>`;
+  }
+
+  // ── Footer ──
+  html += `<div style="font-size:11px;color:#94a3b8;margin-top:8px;">
+    ${days}d · sig ${qr.signal || '?'} · ${d.source || ''}
+    · ${qr.start_utc || '?'} → ${qr.end_utc || '?'}
+  </div>`;
+
+  html += `</div>`;
+  document.getElementById(bodyId).innerHTML = html;
+
+  if (tenants.length === 0 || noData || typeof Chart === "undefined") return;
+
+  // ── Chart.js dual-bar: avg (solid) + peak (ghost) ──
+  if (_dcCharts[days]) { _dcCharts[days].destroy(); _dcCharts[days] = null; }
+
+  const avgData  = tenants.map(t => parseFloat((ts[t].avg_kw  || 0).toFixed(2)));
+  const peakData = tenants.map(t => parseFloat((ts[t].peak_kw || 0).toFixed(2)));
+  const colors   = tenants.map(t => tenantColor(t));
+
+  const ctx = document.getElementById(chartId);
+  if (!ctx) return;
+
+  _dcCharts[days] = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: tenants,
+      datasets: [
+        {
+          label: "Avg kW",
+          data: avgData,
+          backgroundColor: colors.map(c => c + "cc"),
+          borderColor: colors,
+          borderWidth: 1.5,
+          borderRadius: 4,
+        },
+        {
+          label: "Peak kW",
+          data: peakData,
+          backgroundColor: colors.map(c => c + "33"),
+          borderColor: colors.map(c => c + "99"),
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+      ],
+    },
+    options: {
+      indexAxis: "y",
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "top", labels: { font: { size: 11 }, boxWidth: 14, padding: 10 } },
+        tooltip: {
+          callbacks: {
+            label: ctx => ` ${ctx.dataset.label}: ${ctx.parsed.x.toFixed(2)} kW`,
+            afterBody: items => {
+              const t = tenants[items[0].dataIndex];
+              return [`  Readings: ${(ts[t].count || 0).toLocaleString()}`];
+            },
+          },
+        },
+      },
+      scales: {
+        x: {
+          title: { display: true, text: "kW", font: { size: 11 } },
+          grid: { color: "#f1f5f9" },
+          ticks: { font: { size: 11 } },
+        },
+        y: {
+          grid: { display: false },
+          ticks: { font: { size: 12, weight: "600" } },
+        },
+      },
+    },
+  });
+}
+
+// ── Re-render DC load when DoD dropdown changes ───────────────────
+function rerenderDCLoad(days) {
+  const d = _dcLastResult[days];
+  if (!d) return;
+  const dodEl = document.getElementById(`dc-dod-${days}`);
+  const dod   = dodEl ? parseFloat(dodEl.value) : 0.8;
+  // Destroy old chart before re-render
+  if (_dcCharts[days]) { _dcCharts[days].destroy(); _dcCharts[days] = null; }
+  renderDCLoadResults(d, days, dod);
+}
+
+feather.replace();
+</script>
+{% endblock %}

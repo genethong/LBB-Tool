@@ -1,0 +1,614 @@
+{% extends "base.html" %}
+{% block title %}Data Extractor{% endblock %}
+
+{% block head %}
+<style>
+/* ── Signal tree ── */
+.mo-node       { border:1px solid #e2e8f0; border-radius:8px; margin-bottom:8px; overflow:hidden; }
+.mo-header     {
+  display:flex; align-items:center; gap:10px; padding:10px 14px;
+  background:#f8fafc; cursor:pointer; user-select:none;
+}
+.mo-header:hover { background:#eff6ff; }
+.mo-header.open  { background:#eff6ff; border-bottom:1px solid #e2e8f0; }
+.mo-label      { font-size:13px; font-weight:600; color:#0f172a; flex:1; }
+.mo-count      { font-size:11px; color:#94a3b8; background:#e2e8f0; padding:1px 7px; border-radius:10px; }
+.mo-children   { padding:6px 0; display:none; }
+.mo-children.open { display:block; }
+
+.sigtype-row   {
+  display:flex; align-items:center; gap:8px; padding:6px 14px 4px 28px;
+  border-bottom:1px solid #f1f5f9;
+}
+.sigtype-label { font-size:12px; font-weight:600; color:#374151; flex:1; }
+.sigtype-count { font-size:10px; color:#94a3b8; background:#f1f5f9; padding:1px 6px; border-radius:10px; }
+
+.signals-panel { padding:0 14px 8px 44px; display:none; }
+.signals-panel.open { display:block; }
+.sig-check-row {
+  display:flex; align-items:center; gap:8px; padding:4px 0;
+  border-bottom:1px solid #f8fafc; font-size:12px;
+}
+.sig-check-row:hover { background:#f0fdf4; border-radius:4px; padding-left:4px; }
+.sig-check-row input { flex-shrink:0; }
+.sig-cname      { flex:1; color:#1e293b; font-weight:500; }
+.sig-cunit-badge{ font-size:10px; background:#e0f2fe; color:#0369a1; padding:1px 6px; border-radius:10px; flex-shrink:0; }
+.sig-cid-small  { font-family:monospace; font-size:10px; color:#94a3b8; flex-shrink:0; }
+.sigs-loading   { color:#94a3b8; font-size:12px; padding:6px 0; font-style:italic; }
+
+/* ── Alarms section ── */
+.alarm-section {
+  border:1px solid #fbbf24; border-radius:8px; margin-top:8px; overflow:hidden; background:#fffbeb;
+}
+.alarm-section-header {
+  display:flex; align-items:center; gap:8px; padding:9px 14px;
+  font-size:12px; font-weight:600; color:#92400e;
+  background:#fef3c7; border-bottom:1px solid #fde68a;
+}
+.alarm-row {
+  display:flex; align-items:center; gap:8px; padding:7px 14px;
+  font-size:12px; color:#374151; border-bottom:1px solid #fef3c7;
+}
+.alarm-row:last-child { border-bottom:none; }
+.alarm-row:hover { background:#fef9c3; }
+
+/* ── Jobs summary ── */
+.job-chip {
+  background:#eff6ff; border:1px solid #93c5fd; border-radius:6px;
+  padding:3px 9px; font-size:11px; color:#1e40af; display:inline-flex; align-items:center; gap:5px;
+}
+
+/* ── Result job chips ── */
+.job-result-chip {
+  display:inline-flex; align-items:center; gap:5px;
+  background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px;
+  padding:4px 10px; font-size:11px; color:#374151; margin:2px;
+}
+.job-result-chip.has-data { background:#dcfce7; border-color:#86efac; color:#166534; }
+.job-result-chip.no-data  { background:#fef9c3; border-color:#fde68a; color:#78350f; }
+
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Custom Data Extractor</h1>
+    <p>Select sites, choose signals across MO types, and extract to Excel</p>
+  </div>
+</div>
+
+<div class="page-body">
+<div class="row g-3">
+
+  <!-- ══ Left: Controls ══ -->
+  <div class="col-lg-4">
+
+    <!-- Step 1: Sites -->
+    <div class="card mb-3">
+      <div class="card-header"><h6><i data-feather="map-pin"></i> Step 1 — Select Sites</h6></div>
+      <div class="card-body p-3">
+        {% include 'site_selector.html' %}
+      </div>
+    </div>
+
+    <!-- Step 2: Select Data -->
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h6 style="margin:0;"><i data-feather="git-branch"></i> Step 2 — Select Data</h6>
+        <button class="btn btn-xs btn-outline-primary" style="font-size:11px;padding:2px 8px;"
+                onclick="loadSignalTree()" id="load-tree-btn">
+          <i data-feather="refresh-cw" style="width:11px;height:11px;"></i> Load Tree
+        </button>
+      </div>
+      <div class="card-body p-3">
+
+        <!-- Hint before tree is loaded -->
+        <div id="tree-hint" style="font-size:12px;color:#94a3b8;margin-bottom:8px;">
+          Select sites above, then click <strong>Load Tree</strong>.
+        </div>
+
+        <!-- MO signal tree (populated by loadSignalTree) -->
+        <div id="signal-tree"></div>
+
+        <!-- Alarms section — separate from MO hierarchy -->
+        <div id="alarm-section" style="display:none;">
+          <div class="alarm-section">
+            <div class="alarm-section-header">
+              <i data-feather="alert-triangle" style="width:13px;height:13px;"></i>
+              Alarms
+              <span style="font-size:10px;font-weight:400;margin-left:2px;">(not MO-specific)</span>
+            </div>
+            <div class="alarm-row">
+              <input type="checkbox" id="ck-alarm-current" onchange="onAlarmCheck()">
+              <label for="ck-alarm-current" style="cursor:pointer;margin:0;flex:1;">
+                <i data-feather="zap" style="width:12px;height:12px;margin-right:4px;color:#f59e0b;"></i>
+                Active Alarms
+              </label>
+            </div>
+            <div class="alarm-row">
+              <input type="checkbox" id="ck-alarm-history" onchange="onAlarmCheck()">
+              <label for="ck-alarm-history" style="cursor:pointer;margin:0;flex:1;">
+                <i data-feather="clock" style="width:12px;height:12px;margin-right:4px;color:#64748b;"></i>
+                Historical Alarms
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Date range — shown when Statistical or Historical Alarms selected -->
+        <div id="date-range" style="display:none;margin-top:10px;">
+          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+            <i data-feather="calendar" style="width:11px;height:11px;"></i>
+            Date Range <span style="font-weight:400;">(Statistical / Historical Alarms)</span>
+          </div>
+          <div class="row g-2">
+            <div class="col-6">
+              <label class="form-label" style="font-size:11px;font-weight:600;">From</label>
+              <input type="datetime-local" id="start-dt" class="form-control form-control-sm">
+            </div>
+            <div class="col-6">
+              <label class="form-label" style="font-size:11px;font-weight:600;">To</label>
+              <input type="datetime-local" id="end-dt" class="form-control form-control-sm">
+            </div>
+          </div>
+        </div>
+
+        <!-- Live jobs summary -->
+        <div id="jobs-summary-wrap" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #f1f5f9;">
+          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:5px;">Selected Extractions</div>
+          <div id="jobs-summary" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+        </div>
+
+      </div>
+    </div>
+
+    <button class="btn btn-primary w-100" onclick="runExtract()">
+      <i data-feather="download-cloud"></i> Extract Data
+    </button>
+
+  </div>
+
+  <!-- ══ Right: Results ══ -->
+  <div class="col-lg-8">
+    <div class="card h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <h6 id="result-title" style="margin:0;"><i data-feather="table"></i> Results</h6>
+        <a id="download-btn" href="#" style="display:none;"
+           class="btn btn-sm btn-success">
+          <i data-feather="download" style="width:13px;height:13px;"></i> Download Excel
+        </a>
+      </div>
+      <!-- Per-job result chips -->
+      <div id="job-chips-row" style="display:none;padding:8px 16px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;gap:4px;"></div>
+      <!-- Data preview -->
+      <div class="card-body p-3" id="result-area">
+        <div class="text-center text-muted py-5">
+          <i data-feather="download-cloud" style="width:48px;height:48px;opacity:0.3;"></i>
+          <p class="mt-3">Configure your selection and click <strong>Extract Data</strong>.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ══════════════════════════════════════════════════════
+//  Initialise date defaults
+// ══════════════════════════════════════════════════════
+// Format a Date as YYYY-MM-DDTHH:MM in LOCAL time (not UTC).
+function fmtLocal(d, hh, mm) {
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}T${p(hh)}:${p(mm)}`;
+}
+
+(function(){
+  const now  = new Date();
+  const week = new Date(now - 7 * 86400000);
+  document.getElementById("end-dt").value   = fmtLocal(now,  23, 59);
+  document.getElementById("start-dt").value = fmtLocal(week,  0,  0);
+})();
+
+// ══════════════════════════════════════════════════════
+//  State
+// ══════════════════════════════════════════════════════
+let moAvailable   = {};   // {mo_type: ne_count}
+let moSelections  = {};   // {mo_type: {sampling:{enabled,signal_ids,signals}, config:{...}, statistic:{...}}}
+let alarmCurrentEnabled = false;
+let alarmHistoryEnabled = false;
+
+const MO_SIG_TYPES = [
+  { key: "sampling",  label: "Sampling",    icon: "activity"    },
+  { key: "config",    label: "Config",      icon: "sliders"     },
+  { key: "statistic", label: "Statistical", icon: "bar-chart-2" },
+];
+
+let _treeGen = 0;   // incremented each time loadSignalTree runs; stale loads bail out
+
+// ══════════════════════════════════════════════════════
+//  Load Signal Tree
+// ══════════════════════════════════════════════════════
+async function loadSignalTree(){
+  if(!selectedSiteDns || !selectedSiteDns.length){
+    toast("Select at least one site first (Step 1)","warning"); return;
+  }
+
+  const gen = ++_treeGen;
+
+  const treeEl   = document.getElementById("signal-tree");
+  const hintEl   = document.getElementById("tree-hint");
+  const alarmSec = document.getElementById("alarm-section");
+
+  treeEl.innerHTML = `<div style="font-size:12px;color:#64748b;padding:6px 0;">
+    <span class="spinner-border spinner-border-sm text-primary"></span> Loading MO types…</div>`;
+  hintEl.style.display  = "none";
+  alarmSec.style.display = "none";
+
+  try {
+    const r = await fetch("/api/bulk/mo-available", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({site_dns: selectedSiteDns})
+    });
+    moAvailable = await r.json();
+  } catch(e){
+    treeEl.innerHTML = `<div style="color:#ef4444;font-size:12px;">${e}</div>`;
+    return;
+  }
+
+  if(!Object.keys(moAvailable).length){
+    treeEl.innerHTML = `<div style="font-size:12px;color:#f59e0b;padding:6px 0;">
+      No MO types found under selected sites.
+      Try refreshing the NE tree from <strong>Setup</strong>.</div>`;
+    alarmSec.style.display = "";
+    feather.replace();
+    return;
+  }
+
+  // Initialise selection state for each MO type
+  moSelections = {};
+  for(const mo of Object.keys(moAvailable)){
+    moSelections[mo] = {};
+    MO_SIG_TYPES.forEach(st => {
+      moSelections[mo][st.key] = {enabled: false, signal_ids: [], signals: []};
+    });
+  }
+
+  // Render MO nodes — auto-open first one, rest collapsed
+  let firstMO = true;
+  treeEl.innerHTML = Object.entries(moAvailable).map(([mo, cnt]) => {
+    const open = firstMO ? "open" : "";
+    firstMO = false;
+    return `
+    <div class="mo-node" id="mo-node-${CSS.escape(mo)}">
+      <div class="mo-header ${open}" onclick="toggleMO(this,'${escJs(mo)}')">
+        <i data-feather="chevron-right" class="mo-arrow"
+           style="width:14px;height:14px;color:#94a3b8;flex-shrink:0;transition:transform .2s;
+                  ${open ? "transform:rotate(90deg);" : ""}"></i>
+        <span class="mo-label">${mo}</span>
+        <span class="mo-count">${cnt} NE(s)</span>
+      </div>
+      <div class="mo-children ${open}" id="mo-ch-${CSS.escape(mo)}">
+        ${MO_SIG_TYPES.map(st => sigTypeRowHtml(mo, st)).join("")}
+      </div>
+    </div>`;
+  }).join("");
+
+  alarmSec.style.display = "";
+  feather.replace();
+  updateDateRange();
+  updateJobsSummary();
+
+}
+
+// ══════════════════════════════════════════════════════
+//  MO tree helpers
+// ══════════════════════════════════════════════════════
+function escJs(s){ return s.replace(/'/g, "\\'"); }
+
+function sigTypeRowHtml(mo, st){
+  return `
+  <div class="sigtype-row" style="cursor:pointer;" onclick="toggleSigPanel('${escJs(mo)}','${st.key}')">
+    <i data-feather="chevron-right" id="sigarrow-${CSS.escape(mo)}-${st.key}"
+       style="width:13px;height:13px;color:#94a3b8;flex-shrink:0;transition:transform .15s;"></i>
+    <span class="sigtype-label">
+      <i data-feather="${st.icon}" style="width:12px;height:12px;margin-right:4px;"></i>${st.label}
+    </span>
+    <span class="sigtype-count" id="sigs-badge-${CSS.escape(mo)}-${st.key}"></span>
+  </div>
+  <div class="signals-panel" id="sigpanel-${CSS.escape(mo)}-${st.key}"></div>`;
+}
+
+function toggleMO(header, mo){
+  const arrow    = header.querySelector(".mo-arrow");
+  const children = document.getElementById(`mo-ch-${CSS.escape(mo)}`);
+  const open     = children.classList.toggle("open");
+  header.classList.toggle("open", open);
+  arrow.style.transform = open ? "rotate(90deg)" : "";
+}
+
+async function toggleSigPanel(mo, stKey){
+  const panel = document.getElementById(`sigpanel-${CSS.escape(mo)}-${stKey}`);
+  const arrow = document.getElementById(`sigarrow-${CSS.escape(mo)}-${stKey}`);
+  if(!panel) return;
+  const isOpen = panel.classList.toggle("open");
+  if(arrow) arrow.style.transform = isOpen ? "rotate(90deg)" : "";
+  if(!isOpen) return;  // collapsed — nothing to do
+
+  // Already loaded — just re-render
+  if(moSelections[mo] && moSelections[mo][stKey] && moSelections[mo][stKey].signals.length){
+    renderSignalCheckboxes(mo, stKey, panel);
+    return;
+  }
+
+  // Load on first open
+  panel.innerHTML = `<div class="sigs-loading">
+    <span class="spinner-border spinner-border-sm"></span> Loading signals…</div>`;
+  await loadSignals(mo, stKey, _treeGen);
+}
+
+function onAlarmCheck(){
+  alarmCurrentEnabled = document.getElementById("ck-alarm-current").checked;
+  alarmHistoryEnabled = document.getElementById("ck-alarm-history").checked;
+  updateDateRange();
+  updateJobsSummary();
+}
+
+// Show date range when Statistical or Historical Alarms is ticked
+function updateDateRange(){
+  let needDate = alarmHistoryEnabled;
+  if(!needDate){
+    for(const sigtypes of Object.values(moSelections)){
+      if(sigtypes.statistic && sigtypes.statistic.enabled){ needDate = true; break; }
+    }
+  }
+  document.getElementById("date-range").style.display = needDate ? "" : "none";
+  if(needDate) feather.replace();
+}
+
+// ══════════════════════════════════════════════════════
+//  Lazy-load individual signals per MO / signal type
+// ══════════════════════════════════════════════════════
+async function loadSignals(mo, stKey, gen){
+  function stale(){ return gen !== undefined && gen !== _treeGen; }
+  const panel = document.getElementById(`sigpanel-${CSS.escape(mo)}-${stKey}`);
+  if(!panel) return;
+
+  try {
+    const hierResp = await fetch("/api/ne-hierarchy", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({site_dns: selectedSiteDns, mo_type: mo})
+    });
+    if(stale()) return;
+    const hier = await hierResp.json();
+    if(stale()) return;
+
+    let neDn = null;
+    if(hier && hier.length && hier[0].nes && hier[0].nes.length)
+      neDn = hier[0].nes[0].dn;
+    if(!neDn){
+      panel.innerHTML = `<div class="sigs-loading">No NE found for this MO type.</div>`;
+      _setBadge(mo, stKey, "—");
+      return;
+    }
+
+    const sigResp = await fetch("/api/signal-discover", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({ne_dn: neDn, signal_type: stKey})
+    });
+    if(stale()) return;
+    const sd = await sigResp.json();
+    if(stale()) return;
+
+    if(sd.error){
+      panel.innerHTML = `<div class="sigs-loading" style="color:#ef4444;">${sd.error}</div>`;
+      _setBadge(mo, stKey, "error");
+      return;
+    }
+    if(!moSelections[mo] || !moSelections[mo][stKey]) return;
+    moSelections[mo][stKey].signals = sd.signals || [];
+    renderSignalCheckboxes(mo, stKey, panel);
+    _setBadge(mo, stKey, `${(sd.signals||[]).length} signals`);
+  } catch(e){
+    if(!stale()) panel.innerHTML = `<div class="sigs-loading" style="color:#ef4444;">${e}</div>`;
+  }
+}
+
+function _setBadge(mo, stKey, text){
+  const el = document.getElementById(`sigs-badge-${CSS.escape(mo)}-${stKey}`);
+  if(el) el.textContent = text;
+}
+
+function renderSignalCheckboxes(mo, stKey, panel){
+  const sigs     = moSelections[mo][stKey].signals;
+  const selected = new Set(moSelections[mo][stKey].signal_ids.map(String));
+  if(!sigs.length){
+    panel.innerHTML = `<div class="sigs-loading">No signals found in dictionary for this MO type.</div>`; return;
+  }
+  const panelId = `sigpanel-${CSS.escape(mo)}-${stKey}`;
+  panel.innerHTML =
+    `<div style="display:flex;gap:6px;margin-bottom:6px;align-items:center;flex-wrap:wrap;">
+      <button class="btn btn-xs btn-outline-secondary" style="font-size:10px;padding:1px 7px;"
+              onclick="checkAllSigs('${escJs(mo)}','${stKey}',true)">All</button>
+      <button class="btn btn-xs btn-outline-secondary" style="font-size:10px;padding:1px 7px;"
+              onclick="checkAllSigs('${escJs(mo)}','${stKey}',false)">None</button>
+      <input type="text" placeholder="Search signals…"
+             style="font-size:11px;padding:2px 7px;border:1px solid #e2e8f0;border-radius:5px;flex:1;min-width:100px;"
+             oninput="filterSigRows(this,'${panelId}')">
+      <span style="font-size:10px;color:#94a3b8;">${sigs.length} signals</span>
+    </div>` +
+    sigs.map(s => `
+    <div class="sig-check-row" data-signame="${(s.name||'').toLowerCase()}">
+      <input type="checkbox" ${selected.has(String(s.id)) ? "checked" : ""}
+             onchange="onSigCheck('${escJs(mo)}','${stKey}',${s.id},this.checked)">
+      <span class="sig-cname">${s.name || '(unnamed)'}</span>
+      ${s.unit ? `<span class="sig-cunit-badge">${s.unit}</span>` : ''}
+      <code class="sig-cid-small" title="Signal ID">#${s.id}</code>
+    </div>`).join("");
+}
+
+function filterSigRows(input, panelId){
+  const q = input.value.toLowerCase();
+  document.querySelectorAll(`#${panelId} .sig-check-row`).forEach(row => {
+    row.style.display = row.dataset.signame.includes(q) ? "" : "none";
+  });
+}
+
+function checkAllSigs(mo, stKey, checked){
+  moSelections[mo][stKey].signal_ids = checked
+    ? moSelections[mo][stKey].signals.map(s => s.id)
+    : [];
+  moSelections[mo][stKey].enabled = checked && moSelections[mo][stKey].signal_ids.length > 0;
+  const panel = document.getElementById(`sigpanel-${CSS.escape(mo)}-${stKey}`);
+  panel.querySelectorAll("input[type=checkbox]").forEach(cb => cb.checked = checked);
+  updateDateRange();
+  updateJobsSummary();
+}
+
+function onSigCheck(mo, stKey, id, checked){
+  const ids = moSelections[mo][stKey].signal_ids;
+  if(checked){ if(!ids.includes(id)) ids.push(id); }
+  else        { moSelections[mo][stKey].signal_ids = ids.filter(x => x !== id); }
+  // Auto-enable the signal type when any signal is checked; disable when none
+  moSelections[mo][stKey].enabled = moSelections[mo][stKey].signal_ids.length > 0;
+  updateDateRange();
+  updateJobsSummary();
+}
+
+// ══════════════════════════════════════════════════════
+//  Build jobs array
+// ══════════════════════════════════════════════════════
+function getJobs(){
+  const jobs = [];
+  const startMs = dtToMs(document.getElementById("start-dt").value);
+  const endMs   = dtToMs(document.getElementById("end-dt").value);
+
+  for(const [mo, sigtypes] of Object.entries(moSelections)){
+    for(const [stKey, cfg] of Object.entries(sigtypes)){
+      if(!cfg.enabled) continue;
+      const job = {mo_type: mo, signal_type: stKey, signal_ids: cfg.signal_ids};
+      if(stKey === "statistic" && startMs && endMs){
+        job.start_ms = startMs; job.end_ms = endMs;
+      }
+      jobs.push(job);
+    }
+  }
+
+  if(alarmCurrentEnabled){
+    jobs.push({signal_type: "alarm_current"});
+  }
+  if(alarmHistoryEnabled){
+    const j = {signal_type: "alarm_history"};
+    if(startMs && endMs){ j.start_ms = startMs; j.end_ms = endMs; }
+    jobs.push(j);
+  }
+  return jobs;
+}
+
+function updateJobsSummary(){
+  const jobs = getJobs();
+  const wrap = document.getElementById("jobs-summary-wrap");
+  const el   = document.getElementById("jobs-summary");
+  if(!jobs.length){ wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  el.innerHTML = jobs.map(j => {
+    const ids   = j.signal_ids && j.signal_ids.length ? ` · ${j.signal_ids.length} signal(s)` : " · all";
+    const label = j.mo_type ? `${j.mo_type} / ${j.signal_type}${ids}` : j.signal_type;
+    return `<div class="job-chip">${label}</div>`;
+  }).join("");
+}
+
+// ══════════════════════════════════════════════════════
+//  Extract
+// ══════════════════════════════════════════════════════
+async function runExtract(){
+  if(!selectedSiteDns || !selectedSiteDns.length){
+    toast("Select at least one site (Step 1)","warning"); return;
+  }
+  const jobs = getJobs();
+  if(!jobs.length){
+    toast("Select at least one signal type to extract (Step 2)","warning"); return;
+  }
+
+  // Validate date range when needed
+  const needDate = jobs.some(j => j.signal_type === "statistic" || j.signal_type === "alarm_history");
+  if(needDate){
+    const s = document.getElementById("start-dt").value;
+    const e = document.getElementById("end-dt").value;
+    if(!s || !e){ toast("Set a date range for Statistical / Historical Alarms extraction","warning"); return; }
+  }
+
+  showLoading(`Extracting ${jobs.length} job(s) across ${selectedSiteDns.length} site(s)…`);
+
+  try {
+    const resp = await fetch("/api/extract/multi", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({site_dns: selectedSiteDns, jobs})
+    });
+    const d = await resp.json();
+    hideLoading();
+
+    if(d.error){ toast(d.error, "error"); renderError(d.error); return; }
+
+    // Title
+    document.getElementById("result-title").innerHTML =
+      `<i data-feather="table"></i> Results — ${d.count.toLocaleString()} rows · ${d.sheets} sheet(s)`;
+
+    // Download button
+    const dlBtn = document.getElementById("download-btn");
+    if(d.saved_path){
+      dlBtn.href = "/api/download-export?path=" + encodeURIComponent(d.saved_path);
+      dlBtn.style.display = "";
+    } else {
+      dlBtn.style.display = "none";
+    }
+
+    // Per-job chips
+    renderJobChips(d.summary || []);
+
+    // Preview table or empty message
+    if(d.preview && d.preview.rows && d.preview.rows.length){
+      renderTable("result-area", d.preview);
+    } else {
+      document.getElementById("result-area").innerHTML =
+        `<div class="text-center text-muted py-4">
+          <i data-feather="inbox" style="width:32px;height:32px;"></i>
+          <p class="mt-2">No data returned for any selected signal.</p>
+        </div>`;
+    }
+
+    feather.replace();
+    if(d.count > 0) toast(`${d.count.toLocaleString()} rows saved across ${d.sheets} sheet(s)`, "success");
+    else            toast("Extraction complete — no data rows returned", "warning");
+
+  } catch(e){ hideLoading(); toast(String(e), "error"); renderError(String(e)); }
+}
+
+function renderJobChips(summary){
+  const row = document.getElementById("job-chips-row");
+  if(!summary.length){ row.style.display = "none"; return; }
+  row.style.display = "flex";
+  row.innerHTML = summary.map(s => {
+    const cls = s.count > 0 ? "has-data" : "no-data";
+    return `<div class="job-result-chip ${cls}">
+      ${s.label}: <strong>${s.count.toLocaleString()}</strong> rows
+      ${s.message ? `<span style="color:#94a3b8;margin-left:3px;">(${s.message})</span>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderError(msg){
+  document.getElementById("result-area").innerHTML =
+    `<div style="color:#ef4444;font-size:13px;padding:10px;">${msg}</div>`;
+}
+
+
+</script>
+{% endblock %}

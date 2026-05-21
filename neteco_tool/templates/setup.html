@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}Setup{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Setup</h1>
+    <p>Configure NetEco connection and load NE data</p>
+  </div>
+</div>
+
+<div class="page-body">
+<div class="row g-4">
+
+  <!-- ── Connection settings ── -->
+  <div class="col-md-6">
+    <div class="card">
+      <div class="card-header">
+        <h6><i data-feather="server"></i> NetEco Connection</h6>
+      </div>
+      <div class="card-body p-4">
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px;">NetEco Server URL</label>
+          <input type="text" id="neteco_url" class="form-control" placeholder="https://192.168.x.x:32102"
+                 value="{{ config.get('neteco_url','') }}">
+          <div class="form-text">Include <code>https://</code> and port <code>32102</code></div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px;">Username</label>
+          <input type="text" id="username" class="form-control" placeholder="your_nbi_username"
+                 value="{{ config.get('username','') }}">
+        </div>
+
+        <div class="mb-4">
+          <label class="form-label fw-semibold" style="font-size:13px;">Password</label>
+          <div class="input-group">
+            <input type="password" id="password" class="form-control" placeholder="••••••••"
+                   value="{{ config.get('password','') }}">
+            <button class="btn btn-outline-secondary btn-sm" onclick="togglePwd()" type="button">
+              <i data-feather="eye" id="eye-icon" style="width:14px;height:14px;"></i>
+            </button>
+          </div>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button class="btn btn-outline-secondary btn-sm" onclick="testConn()">
+            <i data-feather="wifi" style="width:14px;height:14px;"></i> Test Connection
+          </button>
+          <button class="btn btn-primary btn-sm" onclick="saveConfig()">
+            <i data-feather="save" style="width:14px;height:14px;"></i> Save
+          </button>
+        </div>
+
+        <div id="conn-result" class="mt-3" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Public IP / Whitelist reminder ── -->
+  <div class="col-md-6">
+    <div class="card h-100">
+      <div class="card-header">
+        <h6><i data-feather="shield"></i> IP Whitelist</h6>
+      </div>
+      <div class="card-body p-4">
+        <p style="font-size:13px;color:#475569;">
+          NetEco requires your IP to be whitelisted before the API will accept connections.
+          Add the IP below to the NetEco allowlist.
+        </p>
+        <div style="background:#0f172a;border-radius:10px;padding:20px;text-align:center;">
+          <div style="color:#64748b;font-size:11px;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:6px;">Your Current Public IP</div>
+          <div id="ip-big" style="color:#38bdf8;font-size:28px;font-weight:700;font-family:monospace;letter-spacing:2px;">…</div>
+          <button onclick="copyIP()" class="btn btn-sm mt-3" style="background:rgba(255,255,255,0.1);color:#94a3b8;font-size:12px;">
+            <i data-feather="copy" style="width:12px;height:12px;"></i> Copy to Clipboard
+          </button>
+        </div>
+        <div class="mt-3 p-3" style="background:#fefce8;border:1px solid #fde047;border-radius:8px;font-size:12px;color:#713f12;">
+          <strong>⚠ Dynamic IP?</strong> Your laptop's public IP may change. For production, migrate to your GCP VM (static IP) to avoid re-whitelisting.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Signal Dictionary ── -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h6><i data-feather="book-open"></i> Signal Dictionary</h6>
+      </div>
+      <div class="card-body p-4">
+        <div id="sigdict-status" style="font-size:13px;color:#64748b;">Checking…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── NE Data ── -->
+  <div class="col-12">
+    <div class="card">
+      <div class="card-header">
+        <h6><i data-feather="database"></i> NE Tree Data</h6>
+      </div>
+      <div class="card-body p-4">
+        <p style="font-size:13px;color:#475569;">
+          The NE tree (site/device hierarchy) is cached locally for fast browsing.
+          Load it once — then refresh as needed.
+        </p>
+
+        <div class="row g-3">
+          <!-- Option A: Upload CSV -->
+          <div class="col-md-6">
+            <div style="border:2px dashed #e2e8f0;border-radius:10px;padding:20px;text-align:center;">
+              <i data-feather="upload-cloud" style="width:32px;height:32px;color:#94a3b8;"></i>
+              <div style="font-size:13px;font-weight:600;margin:8px 0 4px;">Upload CM-MO CSV</div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:12px;">Upload your exported CM-MO file for fast offline loading</div>
+              <input type="file" id="csv-file" accept=".csv" class="d-none" onchange="uploadCSV()">
+              <button class="btn btn-outline-primary btn-sm" onclick="document.getElementById('csv-file').click()">
+                Choose File
+              </button>
+            </div>
+          </div>
+
+          <!-- Option B: Fetch from API -->
+          <div class="col-md-6">
+            <div style="border:2px dashed #e2e8f0;border-radius:10px;padding:20px;text-align:center;">
+              <i data-feather="refresh-cw" style="width:32px;height:32px;color:#94a3b8;"></i>
+              <div style="font-size:13px;font-weight:600;margin:8px 0 4px;">Refresh from NetEco API</div>
+              <div style="font-size:12px;color:#64748b;margin-bottom:12px;">Pull live NE tree directly from your NetEco server</div>
+              <button class="btn btn-outline-secondary btn-sm" onclick="refreshFromAPI()">
+                Fetch Now
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="ne-result" class="mt-3" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Show IP in the big display
+fetch("/api/public-ip").then(r=>r.json()).then(d=>{
+  document.getElementById("ip-big").textContent = d.ip || "Unknown";
+});
+
+function togglePwd(){
+  const f = document.getElementById("password");
+  const e = document.getElementById("eye-icon");
+  if(f.type==="password"){ f.type="text"; e.setAttribute("data-feather","eye-off"); }
+  else { f.type="password"; e.setAttribute("data-feather","eye"); }
+  feather.replace();
+}
+
+function getFormData(){
+  return {
+    neteco_url: document.getElementById("neteco_url").value.trim(),
+    username:   document.getElementById("username").value.trim(),
+    password:   document.getElementById("password").value,
+  };
+}
+
+async function testConn(){
+  const d = getFormData();
+  if(!d.neteco_url||!d.username||!d.password){ toast("Fill in all fields","warning"); return; }
+  showLoading("Testing connection…");
+  const r = await fetch("/api/test-connection",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  hideLoading();
+  const res = await r.json();
+  const el = document.getElementById("conn-result");
+  el.style.display="block";
+  if(res.success){
+    el.innerHTML=`<div class="alert alert-success py-2 mb-0" style="font-size:13px;"><i data-feather="check-circle" style="width:14px;height:14px;"></i> ${res.message}</div>`;
+    toast("Connection successful!","success");
+  } else {
+    el.innerHTML=`<div class="alert alert-danger py-2 mb-0" style="font-size:13px;"><i data-feather="x-circle" style="width:14px;height:14px;"></i> ${res.message}</div>`;
+    toast("Connection failed","error");
+  }
+  feather.replace();
+}
+
+async function saveConfig(){
+  const d = getFormData();
+  if(!d.neteco_url||!d.username||!d.password){ toast("Fill in all fields","warning"); return; }
+  await fetch("/api/save-config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  toast("Settings saved","success");
+}
+
+async function uploadCSV(){
+  const file = document.getElementById("csv-file").files[0];
+  if(!file) return;
+  showLoading("Importing CM-MO CSV…");
+  const fd = new FormData(); fd.append("file", file);
+  const r = await fetch("/api/upload-cm-mo",{method:"POST",body:fd});
+  hideLoading();
+  const res = await r.json();
+  const el = document.getElementById("ne-result");
+  el.style.display="block";
+  el.innerHTML = res.success
+    ? `<div class="alert alert-success py-2 mb-0" style="font-size:13px;">✅ ${res.message}</div>`
+    : `<div class="alert alert-danger py-2 mb-0" style="font-size:13px;">❌ ${res.message}</div>`;
+  if(res.success) toast(res.message,"success");
+  else toast(res.message,"error");
+}
+
+async function refreshFromAPI(){
+  showLoading("Fetching NE tree from NetEco API — this may take a minute…");
+  const r = await fetch("/api/refresh-ne-tree",{method:"POST"});
+  hideLoading();
+  const res = await r.json();
+  const el = document.getElementById("ne-result");
+  el.style.display="block";
+  el.innerHTML = res.success
+    ? `<div class="alert alert-success py-2 mb-0" style="font-size:13px;">✅ ${res.message}</div>`
+    : `<div class="alert alert-danger py-2 mb-0" style="font-size:13px;">❌ ${res.message}</div>`;
+  if(res.success) toast(res.message,"success");
+  else toast(res.message,"error");
+}
+
+// ── Signal Dictionary status (read-only, auto-loaded at startup) ──
+(async function(){
+  try {
+    const r = await fetch("/api/signal-dict/status");
+    const d = await r.json();
+    const el = document.getElementById("sigdict-status");
+    if(d.loaded){
+      const s = d.stats;
+      el.innerHTML = `<span style="color:#166534;">
+        <i data-feather="check-circle" style="width:14px;height:14px;"></i>
+        <strong>${d.total.toLocaleString()} signals loaded</strong> —
+        Sampling: ${(s.Sampling||0).toLocaleString()},
+        Config: ${(s.Config||0).toLocaleString()},
+        Statistic: ${(s.Statistic||0).toLocaleString()}
+      </span>`;
+    } else {
+      el.innerHTML = `<span style="color:#b45309;">
+        <i data-feather="alert-triangle" style="width:14px;height:14px;"></i>
+        Signal dictionary not loaded — restart the app to trigger auto-load,
+        or check that <code>data/signal_dict.csv</code> exists.
+      </span>`;
+    }
+    feather.replace();
+  } catch(e){ /* ignore */ }
+})();
+</script>
+{% endblock %}

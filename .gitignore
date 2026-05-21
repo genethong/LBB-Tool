@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Flask / runtime
+instance/
+*.db
+*.sqlite
+*.sqlite3
+neteco_tool/instance/
+
+# Exports & data (may contain sensitive NMS data)
+neteco_tool/exports/
+neteco_tool/data/
+neteco_tool/reports/
+
+# Secrets / config
+.env
+*.env
+config.py
+neteco_tool/config.py
+secrets.json
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

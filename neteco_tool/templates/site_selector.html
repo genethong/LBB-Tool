@@ -1,0 +1,227 @@
+<!-- Reusable Site Selector Component -->
+<!-- Include with: include 'site_selector.html' -->
+<!-- Provides: selectedSiteDns (array), getSelectedSiteNames() -->
+
+<div class="site-selector" id="site-selector-panel">
+
+  <!-- Header -->
+  <div class="selector-header">
+    <div style="font-size:13px;font-weight:600;color:#374151;">Select Sites</div>
+    <div class="d-flex gap-2 align-items-center">
+      <span id="sel-count" style="font-size:12px;color:#64748b;">0 selected</span>
+      <button class="btn btn-xs btn-outline-secondary" style="font-size:11px;padding:2px 8px;" onclick="clearAllSites()">Clear</button>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="px-2 pt-2">
+    <div class="input-group input-group-sm mb-2">
+      <span class="input-group-text" style="background:#f8fafc;">
+        <i data-feather="search" style="width:13px;height:13px;"></i>
+      </span>
+      <input type="text" id="site-search" class="form-control form-control-sm"
+             placeholder="Search site code…" oninput="searchSites(this.value)">
+    </div>
+    <div class="d-flex gap-2 mb-2">
+      <select id="tenant-filter" class="form-select form-select-sm" onchange="applyTenantFilter()" style="font-size:12px;">
+        <option value="">All Tenants</option>
+        <option value="ROBI">Robi</option>
+        <option value="GP">GP</option>
+        <option value="BL">BL (Banglalink)</option>
+        <option value="TBL">TBL</option>
+      </select>
+      <select id="status-filter" class="form-select form-select-sm" onchange="applyTenantFilter()" style="font-size:12px;">
+        <option value="">All Status</option>
+        <option value="CONNECTED">Connected</option>
+        <option value="DISCONNECTED">Disconnected</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Tree body -->
+  <div class="selector-body" id="site-tree-body">
+    <div class="text-center text-muted py-3" style="font-size:13px;">Loading…</div>
+  </div>
+
+  <!-- Search results -->
+  <div id="search-results" style="display:none;padding:8px;">
+    <div style="font-size:11px;color:#64748b;padding:4px 10px;font-weight:600;">SEARCH RESULTS</div>
+    <div id="search-result-list"></div>
+  </div>
+
+</div>
+
+<!-- Selected sites chips -->
+<div class="mt-2">
+  <div style="font-size:12px;color:#64748b;margin-bottom:6px;" id="chips-label" style="display:none;">Selected:</div>
+  <div class="selected-chips" id="selected-chips"></div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────
+let selectedSiteDns = [];
+let selectedSiteNames = {};
+let regionTree = [];
+
+// ── Init ───────────────────────────────────────────────
+(async function loadTree(){
+  const r = await fetch("/api/regions");
+  regionTree = await r.json();
+  renderTree(regionTree);
+})();
+
+function renderTree(tree){
+  const body = document.getElementById("site-tree-body");
+  if(!tree.length){ body.innerHTML = `<div class="text-muted text-center py-3" style="font-size:12px;">No regions found</div>`; return; }
+  body.innerHTML = tree.map(region => renderRegion(region)).join("");
+  feather.replace();
+}
+
+function renderRegion(r, indent=0){
+  const marginLeft = indent * 12;
+  const hasChildren = r.children && r.children.length > 0;
+  return `
+    <div class="region-item" style="margin-left:${marginLeft}px;">
+      <div class="region-label" onclick="toggleRegion(this, '${r.dn}')" data-dn="${r.dn}">
+        <i data-feather="chevron-right" class="chevron"></i>
+        <input type="checkbox" class="form-check-input" style="margin:0;flex-shrink:0;"
+               onclick="event.stopPropagation(); selectAllInRegion('${r.dn}', this.checked)">
+        <span>${r.name}</span>
+        <span class="badge-count">${r.site_count || 0}</span>
+      </div>
+      <div class="region-sites" id="region-${r.dn.replace(/[=]/g,'_')}">
+        ${hasChildren ? r.children.map(c => renderRegion(c, 0)).join("") : ""}
+        <div class="site-loader" id="loader-${r.dn.replace(/[=]/g,'_')}">
+          <div class="text-muted text-center py-2" style="font-size:12px;">Click to load sites…</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function toggleRegion(labelEl, dn){
+  labelEl.classList.toggle("open");
+  const safeId = dn.replace(/[=]/g,'_');
+  const sitesDiv = document.getElementById(`region-${safeId}`);
+  if(!sitesDiv) return;
+  sitesDiv.classList.toggle("open");
+  // Load sites if not loaded yet
+  const loader = document.getElementById(`loader-${safeId}`);
+  if(loader && !loader.dataset.loaded){
+    loader.dataset.loaded = "1";
+    await loadSitesForRegion(dn, loader);
+  }
+}
+
+async function loadSitesForRegion(regionDn, loaderEl){
+  const tenant = document.getElementById("tenant-filter").value;
+  const status = document.getElementById("status-filter").value;
+  const params = new URLSearchParams({region_dn: regionDn});
+  if(tenant) params.set("tenant", tenant);
+  if(status) params.set("status", status);
+  const r = await fetch(`/api/sites?${params}`);
+  const sites = await r.json();
+  if(loaderEl) loaderEl.remove();
+  const safeId = regionDn.replace(/[=]/g,'_');
+  const container = document.getElementById(`region-${safeId}`);
+  if(!container) return;
+  if(!sites.length){
+    container.insertAdjacentHTML("beforeend", `<div class="text-muted" style="font-size:12px;padding:4px 12px;">No sites</div>`);
+    return;
+  }
+  const html = sites.map(s => `
+    <div class="site-item ${selectedSiteDns.includes(s.dn)?'selected':''}" id="site-item-${s.dn.replace(/[=]/g,'_')}"
+         onclick="toggleSite('${s.dn}', '${s.name}', this)">
+      <input type="checkbox" class="form-check-input" style="margin:0;flex-shrink:0;pointer-events:none;"
+             ${selectedSiteDns.includes(s.dn)?'checked':''}>
+      <span class="site-status ${s.status}"></span>
+      <span style="font-size:12px;">${s.name}</span>
+    </div>`).join("");
+  container.insertAdjacentHTML("beforeend", html);
+}
+
+async function selectAllInRegion(regionDn, checked){
+  const params = new URLSearchParams({region_dn: regionDn});
+  const tenant = document.getElementById("tenant-filter").value;
+  const status = document.getElementById("status-filter").value;
+  if(tenant) params.set("tenant", tenant);
+  if(status) params.set("status", status);
+  const r = await fetch(`/api/sites?${params}`);
+  const sites = await r.json();
+  sites.forEach(s => {
+    if(checked){ addSite(s.dn, s.name); }
+    else { removeSite(s.dn); }
+  });
+}
+
+function toggleSite(dn, name, el){
+  if(selectedSiteDns.includes(dn)){ removeSite(dn); el.classList.remove("selected"); el.querySelector('input').checked=false; }
+  else { addSite(dn, name); el.classList.add("selected"); el.querySelector('input').checked=true; }
+}
+
+function addSite(dn, name){
+  if(selectedSiteDns.includes(dn)) return;
+  selectedSiteDns.push(dn);
+  selectedSiteNames[dn] = name;
+  renderChips();
+}
+
+function removeSite(dn){
+  selectedSiteDns = selectedSiteDns.filter(d=>d!==dn);
+  delete selectedSiteNames[dn];
+  // Uncheck in tree if visible
+  const el = document.getElementById(`site-item-${dn.replace(/[=]/g,'_')}`);
+  if(el){ el.classList.remove("selected"); const cb=el.querySelector('input'); if(cb) cb.checked=false; }
+  renderChips();
+}
+
+function clearAllSites(){
+  selectedSiteDns = [];
+  selectedSiteNames = {};
+  document.querySelectorAll(".site-item").forEach(el=>{ el.classList.remove("selected"); const cb=el.querySelector('input'); if(cb) cb.checked=false; });
+  document.querySelectorAll(".region-label input").forEach(cb=>cb.checked=false);
+  renderChips();
+}
+
+function renderChips(){
+  const chips = document.getElementById("selected-chips");
+  const cnt = document.getElementById("sel-count");
+  cnt.textContent = `${selectedSiteDns.length} selected`;
+  chips.innerHTML = selectedSiteDns.map(dn => `
+    <div class="site-chip">
+      <span>${selectedSiteNames[dn] || dn}</span>
+      <span class="remove" onclick="removeSite('${dn}')">×</span>
+    </div>`).join("");
+}
+
+function getSelectedSiteNames(){ return Object.values(selectedSiteNames); }
+
+// ── Search ─────────────────────────────────────────────
+let _searchTimeout;
+function searchSites(q){
+  clearTimeout(_searchTimeout);
+  const tree = document.getElementById("site-tree-body");
+  const results = document.getElementById("search-results");
+  if(!q || q.length < 2){ tree.style.display=""; results.style.display="none"; return; }
+  tree.style.display="none"; results.style.display="block";
+  _searchTimeout = setTimeout(async ()=>{
+    const r = await fetch(`/api/search-sites?q=${encodeURIComponent(q)}`);
+    const sites = await r.json();
+    const list = document.getElementById("search-result-list");
+    if(!sites.length){ list.innerHTML=`<div class="text-muted" style="font-size:12px;padding:6px 10px;">No sites found</div>`; return; }
+    list.innerHTML = sites.map(s=>`
+      <div class="site-item ${selectedSiteDns.includes(s.dn)?'selected':''}" onclick="toggleSite('${s.dn}','${s.name}',this)" id="site-item-${s.dn.replace(/[=]/g,'_')}">
+        <input type="checkbox" class="form-check-input" style="margin:0;flex-shrink:0;pointer-events:none;" ${selectedSiteDns.includes(s.dn)?'checked':''}>
+        <span class="site-status ${s.status}"></span>
+        <span style="font-size:12px;">${s.name}</span>
+        <span class="badge-count ms-1" style="font-size:10px;">${s.status}</span>
+      </div>`).join("");
+  }, 300);
+}
+
+// ── Tenant/Status filter ───────────────────────────────
+function applyTenantFilter(){
+  // Clear loaded sites and reload
+  document.querySelectorAll(".site-loader").forEach(el=>{ el.dataset.loaded=""; el.innerHTML=`<div class="text-muted text-center py-2" style="font-size:12px;">Click region to load…</div>`; });
+  document.querySelectorAll(".region-sites .site-item").forEach(el=>el.remove());
+}
+</script>
