@@ -16,13 +16,14 @@ import pandas as pd
 import requests
 from flask import (
     Flask, jsonify, render_template, request,
-    send_file, session, Response, stream_with_context
+    send_file, session, Response, stream_with_context, redirect, url_for, g
 )
 
 import ne_tree
 import reports as rpt
 import analysis as ana
 import lbb_validation as lbb_val
+import user_db as udb
 from neteco_client import NetEcoClient, NetEcoAPIError
 
 # ─────────────────────────────────────────────
@@ -48,7 +49,20 @@ log = logging.getLogger("neteco_tool")
 log.info("=== NetEco Tool starting ===")
 
 app = Flask(__name__, instance_path=_INSTANCE_DIR)
-app.secret_key = os.environ.get("SECRET_KEY", "neteco-tool-secret-2024-lbb")
+
+# ── Stable SECRET_KEY — persisted to instance/secret_key.txt ──────
+# Generated once on first run, then reused across restarts so that
+# existing user sessions survive a gunicorn restart.
+_sk_file = os.path.join(_INSTANCE_DIR, "secret_key.txt")
+if os.path.exists(_sk_file):
+    with open(_sk_file) as _f:
+        _SECRET = _f.read().strip()
+else:
+    import secrets as _sec
+    _SECRET = _sec.token_hex(32)
+    with open(_sk_file, "w") as _f:
+        _f.write(_SECRET)
+app.secret_key = _SECRET
 
 # ── Auto-load signal dictionary on startup ────
 _SIGNAL_DICT_CSV = os.path.join(_BASE_DIR, "data", "signal_dict.csv")
@@ -72,7 +86,9 @@ _ensure_signal_dict()
 
 CONFIG_FILE = os.path.join(_INSTANCE_DIR, "config.json")
 ne_tree.init_db()
-log.info("Database initialised")
+log.info("NE cache database initialised")
+udb.init_db()
+log.info("User database initialised — default admin: admin / admin123 (change on first login)")
 
 # ─────────────────────────────────────────────
 # Global error handler — logs every exception
@@ -95,6 +111,37 @@ def log_request():
 def log_response(response):
     log.info("← %s %s %s", request.method, request.path, response.status_code)
     return response
+
+
+# ─────────────────────────────────────────────
+# Auth — context processor + guard
+# ─────────────────────────────────────────────
+
+@app.context_processor
+def _inject_current_user():
+    """Make current_user available in every template automatically."""
+    uid = session.get("user_id")
+    if uid:
+        return {"current_user": udb.get_user_by_id(uid)}
+    return {"current_user": None}
+
+
+@app.before_request
+def _require_auth():
+    """
+    Enforce login on every route except:
+      - the login page itself
+      - static assets
+    API routes return JSON 401; page routes redirect to /login.
+    """
+    open_endpoints = {"login_page", "static"}
+    if request.endpoint in open_endpoints:
+        return  # publicly accessible
+
+    if not session.get("user_id"):
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Authentication required", "redirect": "/login"}), 401
+        return redirect(url_for("login_page", next=request.path))
 
 
 # ─────────────────────────────────────────────
@@ -177,6 +224,131 @@ def view_logs():
     <a href="/logs" onclick="location.reload();return false;">🔄 Refresh</a>
     <h3 style="color:#e2e8f0;">NetEco Tool — Log (last 200 lines, newest first)</h3>
     <pre>{content}</pre></body></html>"""
+
+
+# ─────────────────────────────────────────────
+# Login / logout
+# ─────────────────────────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
+def login_page():
+    if session.get("user_id"):
+        return redirect("/")
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        user = udb.verify_login(username, password)
+        if user:
+            session["user_id"]   = user["id"]
+            session["username"]  = user["username"]
+            session["is_admin"]  = bool(user["is_admin"])
+            log.info("LOGIN: user '%s' authenticated", username)
+            return redirect(request.args.get("next") or "/")
+        error = "Invalid username or password"
+        log.warning("LOGIN: failed attempt for username '%s'", username)
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    username = session.get("username", "?")
+    session.clear()
+    log.info("LOGOUT: user '%s' logged out", username)
+    return redirect("/login")
+
+
+# ─────────────────────────────────────────────
+# Admin — user management
+# ─────────────────────────────────────────────
+
+@app.route("/admin/users")
+def admin_users_page():
+    if not session.get("is_admin"):
+        return "Forbidden — admin access required", 403
+    users = udb.list_users()
+    return render_template("admin_users.html", users=users)
+
+
+@app.route("/api/admin/users", methods=["GET", "POST"])
+def api_admin_users():
+    if not session.get("is_admin"):
+        return jsonify({"error": "Forbidden"}), 403
+    if request.method == "GET":
+        return jsonify(udb.list_users())
+    data = request.json or {}
+    ok, msg = udb.create_user(
+        data.get("username", ""),
+        data.get("password", ""),
+        is_admin=bool(data.get("is_admin", False)),
+    )
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/admin/users/<int:uid>", methods=["DELETE"])
+def api_admin_delete_user(uid):
+    if not session.get("is_admin"):
+        return jsonify({"error": "Forbidden"}), 403
+    if uid == session.get("user_id"):
+        return jsonify({"ok": False, "message": "You cannot delete your own account"})
+    ok, msg = udb.delete_user(uid)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/admin/users/<int:uid>/reset-password", methods=["POST"])
+def api_admin_reset_password(uid):
+    if not session.get("is_admin"):
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.json or {}
+    ok, msg = udb.change_password(uid, data.get("password", ""))
+    return jsonify({"ok": ok, "message": msg})
+
+
+# ─────────────────────────────────────────────
+# User profile, password, history
+# ─────────────────────────────────────────────
+
+@app.route("/profile")
+def profile_page():
+    uid = session["user_id"]
+    run_hist = udb.get_run_history(uid, limit=25)
+    lbb_hist = udb.get_lbb_history(uid, limit=15)
+    site_sels = udb.get_all_site_selections(uid)
+    return render_template("profile.html",
+                           run_history=run_hist,
+                           lbb_history=lbb_hist,
+                           site_selections=site_sels)
+
+
+@app.route("/api/user/change-password", methods=["POST"])
+def api_change_password():
+    data = request.json or {}
+    current_pwd = data.get("current_password", "")
+    new_pwd     = data.get("new_password", "")
+    # Verify current password before allowing change
+    user = udb.get_user_by_username(session["username"])
+    from werkzeug.security import check_password_hash as _chk
+    if not user or not _chk(user["password_hash"], current_pwd):
+        return jsonify({"ok": False, "message": "Current password is incorrect"})
+    ok, msg = udb.change_password(session["user_id"], new_pwd)
+    return jsonify({"ok": ok, "message": msg})
+
+
+@app.route("/api/user/history")
+def api_user_history():
+    uid = session["user_id"]
+    return jsonify({
+        "run_history": udb.get_run_history(uid, limit=25),
+        "lbb_history": udb.get_lbb_history(uid, limit=15),
+    })
+
+
+@app.route("/api/user/site-selection")
+def api_get_site_selection():
+    tool = request.args.get("tool", "").strip()
+    if not tool:
+        return jsonify([])
+    return jsonify(udb.get_site_selection(session["user_id"], tool))
 
 
 # ─────────────────────────────────────────────
@@ -352,19 +524,26 @@ def api_refresh_ne_tree():
 
 @app.route("/api/upload-cm-mo", methods=["POST"])
 def api_upload_cm_mo():
-    """Accept a CM-MO CSV upload and import it."""
+    """Accept a CM-MO CSV upload and import it.
+    Uses a UUID-suffixed temp file so concurrent uploads don't overwrite each other.
+    """
+    import uuid as _uuid
     if "file" not in request.files:
         return jsonify({"success": False, "message": "No file provided"})
     f = request.files["file"]
     if not f.filename.endswith(".csv"):
         return jsonify({"success": False, "message": "Please upload a .csv file"})
-    tmp_path = os.path.join(os.path.dirname(__file__), "instance", "cm_mo_upload.csv")
-    f.save(tmp_path)
+    # Unique temp path per request — safe for concurrent uploads
+    tmp_path = os.path.join(_INSTANCE_DIR, f"cm_mo_upload_{_uuid.uuid4().hex}.csv")
     try:
+        f.save(tmp_path)
         count = ne_tree.load_from_csv(tmp_path)
         return jsonify({"success": True, "message": f"Imported {count:,} NE nodes from CSV"})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)  # always clean up the temp file
 
 
 # ─────────────────────────────────────────────
@@ -624,6 +803,14 @@ def api_extract():
         title = f"Extract_{mo_type.replace(' ','_')}_{sig_type}"
         saved_path = _save_excel(rows, cols, title)
         log.info("EXTRACT: saved %d rows → %s", len(rows), saved_path)
+        # ── Save per-user history + last site selection ──
+        try:
+            udb.add_run_history(session["user_id"], "extract",
+                                f"{mo_type} ({sig_type}) — {len(site_dns)} site(s)",
+                                len(rows), saved_path)
+            udb.save_site_selection(session["user_id"], "extractor", site_dns)
+        except Exception as _he:
+            log.warning("Could not save run history: %s", _he)
         return jsonify({"columns": cols, "rows": rows, "count": len(rows), "saved_path": saved_path})
 
     except NetEcoAPIError as e:
@@ -689,6 +876,13 @@ def api_run_report():
             saved_path = _save_excel(result["rows"], result.get("columns", []), f"Report_{report_id}")
             result["saved_path"] = saved_path
             log.info("REPORT: saved %d rows → %s", len(result["rows"]), saved_path)
+            try:
+                udb.add_run_history(session["user_id"], "report",
+                                    f"{report_id} — {len(site_dns)} site(s)",
+                                    len(result["rows"]), saved_path)
+                udb.save_site_selection(session["user_id"], "reports", site_dns)
+            except Exception as _he:
+                log.warning("Could not save run history: %s", _he)
         return jsonify(result)
     except NetEcoAPIError as e:
         return jsonify({"error": str(e)})
@@ -724,6 +918,13 @@ def api_battery_backup():
             saved_path = _save_excel(result["rows"], result.get("columns", []), "BatteryBackup_Analysis")
             result["saved_path"] = saved_path
             log.info("ANALYSIS: saved %d rows → %s", len(result["rows"]), saved_path)
+            try:
+                udb.add_run_history(session["user_id"], "analysis",
+                                    f"Battery Backup — {len(site_dns)} site(s)",
+                                    len(result["rows"]), saved_path)
+                udb.save_site_selection(session["user_id"], "analysis", site_dns)
+            except Exception as _he:
+                log.warning("Could not save run history: %s", _he)
         return jsonify(result)
     except NetEcoAPIError as e:
         return jsonify({"error": str(e)})
@@ -782,27 +983,18 @@ def api_lbb_validate():
         result["parse_warnings"] = warnings
         log.info("LBB Validation (%s): %d site(s) processed", mode, result.get("count", 0))
 
-        # ── Save last-run summary for the dashboard ───────────────
+        # ── Save per-user LBB run to history ──────────────────────
         try:
             results_list = result.get("results", [])
-            pass_c  = sum(1 for r in results_list
-                          if str(r.get("verdict", "")).lower().startswith("pass"))
-            fail_c  = sum(1 for r in results_list
-                          if str(r.get("verdict", "")).lower().startswith("fail"))
-            inc_c   = len(results_list) - pass_c - fail_c
-            _summary = {
-                "run_at":       datetime.now(_BDT).strftime("%Y-%m-%d %H:%M BDT"),
-                "run_at_ms":    int(time.time() * 1000),
-                "mode":         mode,
-                "total":        len(results_list),
-                "pass_count":   pass_c,
-                "fail_count":   fail_c,
-                "inc_count":    inc_c,
-            }
-            with open(os.path.join(_INSTANCE_DIR, "last_lbb_summary.json"), "w") as _sf:
-                json.dump(_summary, _sf)
+            pass_c = sum(1 for r in results_list
+                         if str(r.get("verdict", "")).lower().startswith("pass"))
+            fail_c = sum(1 for r in results_list
+                         if str(r.get("verdict", "")).lower().startswith("fail"))
+            inc_c  = len(results_list) - pass_c - fail_c
+            udb.add_lbb_run(session["user_id"], mode,
+                            len(results_list), pass_c, fail_c, inc_c)
         except Exception as _se:
-            log.warning("Could not save LBB summary: %s", _se)
+            log.warning("Could not save LBB run to user history: %s", _se)
 
         return jsonify(result)
     except NetEcoAPIError as e:
@@ -887,17 +1079,22 @@ def api_dashboard_status():
     """
     Returns combined dashboard status in one call:
       freshness  — NE data load timestamp and site count
-      lbb        — last LBB validation run summary
+      lbb        — last LBB validation run for THIS user (from users.db)
     """
     freshness = ne_tree.get_freshness()
     lbb_summary = {}
-    summary_path = os.path.join(_INSTANCE_DIR, "last_lbb_summary.json")
-    if os.path.isfile(summary_path):
-        try:
-            with open(summary_path) as _f:
-                lbb_summary = json.load(_f)
-        except Exception:
-            pass
+    uid = session.get("user_id")
+    if uid:
+        last = udb.get_last_lbb_run(uid)
+        if last:
+            lbb_summary = {
+                "run_at":     last.get("run_at", ""),
+                "mode":       last.get("mode", ""),
+                "total":      last.get("total", 0),
+                "pass_count": last.get("pass_count", 0),
+                "fail_count": last.get("fail_count", 0),
+                "inc_count":  last.get("inc_count", 0),
+            }
     return jsonify({"freshness": freshness, "lbb": lbb_summary})
 
 

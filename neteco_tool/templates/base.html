@@ -190,9 +190,44 @@
   <a href="/logs" class="nav-link-item {% if request.path=='/logs' %}active{% endif %}">
     <i data-feather="terminal"></i> Logs
   </a>
+  {% if current_user and current_user.is_admin %}
+  <a href="/admin/users" class="nav-link-item {% if request.path=='/admin/users' %}active{% endif %}">
+    <i data-feather="users"></i> User Management
+  </a>
+  {% endif %}
+
+  <!-- Logged-in user -->
+  {% if current_user %}
+  <div style="margin: auto 12px 0; padding-bottom: 4px;">
+    <a href="/profile"
+       style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;
+              text-decoration:none;color:#94a3b8;font-size:13px;transition:all .15s;
+              {% if request.path=='/profile' %}background:var(--accent);color:#fff;{% endif %}"
+       onmouseover="if(this.style.background!='var(--accent)')this.style.background='rgba(255,255,255,0.07)'"
+       onmouseout="if('{{ request.path }}'!='/profile')this.style.background=''">
+      <i data-feather="user" style="width:16px;height:16px;flex-shrink:0;"></i>
+      <div style="min-width:0;">
+        <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          {{ current_user.username }}
+        </div>
+        <div style="font-size:10px;opacity:0.6;text-transform:uppercase;letter-spacing:0.8px;">
+          {% if current_user.is_admin %}Admin{% else %}User{% endif %}
+        </div>
+      </div>
+    </a>
+    <a href="/logout"
+       style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:8px;
+              text-decoration:none;color:#64748b;font-size:12px;transition:all .15s;"
+       onmouseover="this.style.background='rgba(255,255,255,0.05)';this.style.color='#ef4444'"
+       onmouseout="this.style.background='';this.style.color='#64748b'">
+      <i data-feather="log-out" style="width:14px;height:14px;flex-shrink:0;"></i>
+      Sign out
+    </a>
+  </div>
+  {% endif %}
 
   <!-- Public IP -->
-  <div class="ip-badge">
+  <div class="ip-badge" style="{% if current_user %}margin-top:8px;{% endif %}">
     <div class="label">Your Public IP &nbsp;<span class="copy-btn" onclick="copyIP()" title="Copy"><i data-feather="copy" style="width:12px;height:12px;"></i></span></div>
     <div class="ip-val" id="sidebar-ip">Loading…</div>
   </div>

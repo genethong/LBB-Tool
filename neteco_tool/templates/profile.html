@@ -1,0 +1,221 @@
+{% extends "base.html" %}
+{% block title %}My Profile{% endblock %}
+
+{% block head %}
+<style>
+.history-badge {
+  display: inline-block;
+  border-radius: 20px;
+  padding: 2px 9px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-extract  { background:#eff6ff; color:#1d4ed8; }
+.badge-report   { background:#fdf4ff; color:#7c3aed; }
+.badge-analysis { background:#f0fdf4; color:#15803d; }
+.verdict-pass { color: #15803d; font-weight: 600; }
+.verdict-fail { color: #b91c1c; font-weight: 600; }
+.verdict-inc  { color: #92400e; font-weight: 600; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>My Profile</h1>
+    <p>{{ current_user.username }} · Run history &amp; site selections</p>
+  </div>
+</div>
+
+<div class="page-body">
+  <div class="row g-4">
+
+    <!-- Left column -->
+    <div class="col-lg-4">
+
+      <!-- Account card -->
+      <div class="card mb-4">
+        <div class="card-header">
+          <h6><i data-feather="user" style="width:14px;height:14px;"></i> Account</h6>
+        </div>
+        <div class="card-body p-3">
+          <div class="mb-2" style="font-size:14px;">
+            <span style="color:#64748b;">Username:</span>
+            <strong class="ms-2">{{ current_user.username }}</strong>
+            {% if current_user.is_admin %}
+            <span class="ms-2 badge" style="background:#eff6ff;color:#1d4ed8;font-size:10px;">Admin</span>
+            {% endif %}
+          </div>
+          <div class="mb-3" style="font-size:13px;color:#64748b;">
+            Member since {{ current_user.created_at or '—' }}
+          </div>
+
+          <hr style="border-color:#e2e8f0;">
+          <p style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px;">Change Password</p>
+          <div class="mb-2">
+            <input type="password" id="cur-pwd" class="form-control form-control-sm"
+                   placeholder="Current password" autocomplete="current-password">
+          </div>
+          <div class="mb-2">
+            <input type="password" id="new-pwd" class="form-control form-control-sm"
+                   placeholder="New password (min 6 chars)" autocomplete="new-password">
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="changePwd()">Update Password</button>
+          <span id="pwd-msg" class="ms-2" style="font-size:12px;"></span>
+        </div>
+      </div>
+
+      <!-- Last site selections -->
+      {% if site_selections %}
+      <div class="card">
+        <div class="card-header">
+          <h6><i data-feather="map-pin" style="width:14px;height:14px;"></i> Last Site Selections</h6>
+        </div>
+        <div class="card-body p-3">
+          {% for tool, dns in site_selections.items() %}
+          <div class="mb-2">
+            <div style="font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;font-weight:600;margin-bottom:3px;">
+              {{ tool }}
+            </div>
+            <div style="font-size:12px;color:#374151;">
+              {% if dns %}
+                {{ dns|length }} site(s) selected
+              {% else %}
+                <span style="color:#94a3b8;">—</span>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+
+    <!-- Right column -->
+    <div class="col-lg-8">
+
+      <!-- LBB validation history -->
+      <div class="card mb-4">
+        <div class="card-header">
+          <h6>
+            <i data-feather="shield" style="width:14px;height:14px;"></i>
+            LBB Validation History
+            <span class="badge-count ms-1">{{ lbb_history|length }}</span>
+          </h6>
+        </div>
+        {% if lbb_history %}
+        <div class="card-body p-0">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr style="background:#f8fafc;">
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Run At</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Mode</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Sites</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Pass</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Fail</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">?</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in lbb_history %}
+              <tr>
+                <td style="padding:8px 14px;font-size:12px;color:#64748b;">{{ r.run_at }}</td>
+                <td style="padding:8px 14px;">
+                  <span style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;
+                               {% if r.mode == 'full' %}color:#7c3aed;{% else %}color:#1d4ed8;{% endif %}">
+                    {{ r.mode }}
+                  </span>
+                </td>
+                <td style="padding:8px 14px;font-size:13px;font-weight:600;">{{ r.total }}</td>
+                <td style="padding:8px 14px;" class="verdict-pass">{{ r.pass_count }}</td>
+                <td style="padding:8px 14px;" class="verdict-fail">{{ r.fail_count }}</td>
+                <td style="padding:8px 14px;" class="verdict-inc">{{ r.inc_count }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="card-body text-center py-4" style="color:#94a3b8;font-size:13px;">
+          No LBB validations run yet.
+          <a href="/lbb-validation" class="ms-2 btn btn-sm btn-outline-primary">Run Now</a>
+        </div>
+        {% endif %}
+      </div>
+
+      <!-- Extract / report / analysis history -->
+      <div class="card">
+        <div class="card-header">
+          <h6>
+            <i data-feather="clock" style="width:14px;height:14px;"></i>
+            Run History
+            <span class="badge-count ms-1">{{ run_history|length }}</span>
+          </h6>
+        </div>
+        {% if run_history %}
+        <div class="card-body p-0">
+          <table class="table table-sm table-hover mb-0">
+            <thead>
+              <tr style="background:#f8fafc;">
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Run At</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Type</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Description</th>
+                <th style="padding:9px 14px;font-size:11px;font-weight:600;color:#374151;">Rows</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in run_history %}
+              <tr>
+                <td style="padding:8px 14px;font-size:12px;color:#64748b;white-space:nowrap;">{{ r.run_at }}</td>
+                <td style="padding:8px 14px;">
+                  <span class="history-badge badge-{{ r.run_type }}">{{ r.run_type }}</span>
+                </td>
+                <td style="padding:8px 14px;font-size:12px;color:#374151;">{{ r.description or '—' }}</td>
+                <td style="padding:8px 14px;font-size:13px;font-weight:600;color:#0f172a;">
+                  {{ r.row_count if r.row_count else '—' }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% else %}
+        <div class="card-body text-center py-4" style="color:#94a3b8;font-size:13px;">
+          No runs yet. Use Data Extractor, Reports, or Analysis to get started.
+        </div>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function changePwd() {
+  const curPwd = document.getElementById("cur-pwd").value;
+  const newPwd = document.getElementById("new-pwd").value;
+  const msgEl  = document.getElementById("pwd-msg");
+  if (!curPwd || !newPwd) {
+    msgEl.style.color = "#ef4444";
+    msgEl.textContent = "Both fields required.";
+    return;
+  }
+  const resp = await fetch("/api/user/change-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password: curPwd, new_password: newPwd }),
+  });
+  const d = await resp.json();
+  msgEl.style.color = d.ok ? "#22c55e" : "#ef4444";
+  msgEl.textContent = d.message;
+  if (d.ok) {
+    document.getElementById("cur-pwd").value = "";
+    document.getElementById("new-pwd").value = "";
+  }
+}
+feather.replace();
+</script>
+{% endblock %}
