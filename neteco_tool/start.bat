@@ -34,12 +34,9 @@ if not exist "%PY_EXE%" (
     REM Unblock downloaded files so Windows security doesn't block them
     powershell -Command "Get-ChildItem '%PY_DIR%' -Recurse | ForEach-Object { try { Unblock-File $_.FullName } catch {} }"
 
-    REM Bootstrap pip using get-pip.py, forcing install into our embedded Python
-    echo     Installing pip...
-    powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%DIR%get-pip.py' -UseBasicParsing"
-    set "PYTHONPATH=%PKGS%"
-    "%PY_EXE%" "%DIR%get-pip.py" --prefix="%PY_DIR%" --no-warn-script-location -q
-    del "%DIR%get-pip.py"
+    REM Download pip.pyz (self-contained pip, no installation needed)
+    echo     Downloading pip...
+    powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/pip/pip.pyz' -OutFile '%DIR%pip.pyz' -UseBasicParsing"
 
     echo     Python ready.
     echo.
@@ -52,7 +49,7 @@ REM ── Step 2: Install requirements if flask not present ──
 "%PY_EXE%" -c "import flask" 2>nul
 if errorlevel 1 (
     echo [2/3] Installing dependencies (one-time^)...
-    "%PY_EXE%" -m pip install -r "%DIR%requirements-windows.txt" --target="%PKGS%" --no-warn-script-location -q
+    "%PY_EXE%" "%DIR%pip.pyz" install -r "%DIR%requirements-windows.txt" --target="%PKGS%" --no-warn-script-location -q
     if errorlevel 1 (
         echo.
         echo ERROR: Failed to install dependencies.
