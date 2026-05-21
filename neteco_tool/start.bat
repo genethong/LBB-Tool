@@ -39,9 +39,10 @@ REM ── Step 2: Install requirements if flask not present ──
 "%PY_EXE%" -c "import flask" 2>nul
 if errorlevel 1 (
     echo [2/3] Installing dependencies (one-time^)...
-    "%PIP_EXE%" install -r "%DIR%requirements.txt" --no-warn-script-location -q
+    "%PIP_EXE%" install -r "%DIR%requirements.txt" --target="%PY_DIR%\Lib\site-packages" --no-warn-script-location -q
     if errorlevel 1 (
         echo ERROR: Failed to install dependencies.
+        echo Try right-clicking start.bat and selecting "Run as administrator".
         pause & exit /b 1
     )
     echo     Dependencies ready.
