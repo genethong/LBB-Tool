@@ -31,6 +31,8 @@ if not exist "%PY_EXE%" (
     powershell -Command "Invoke-WebRequest -Uri 'https://bootstrap.pypa.io/get-pip.py' -OutFile '%DIR%get-pip.py' -UseBasicParsing"
     "%PY_EXE%" "%DIR%get-pip.py" --no-warn-script-location -q
     del "%DIR%get-pip.py"
+    REM Unblock all downloaded executables
+    powershell -Command "Get-ChildItem '%PY_DIR%' -Recurse -Include *.exe,*.dll | Unblock-File"
     echo     Python ready.
     echo.
 )
@@ -39,7 +41,7 @@ REM ── Step 2: Install requirements if flask not present ──
 "%PY_EXE%" -c "import flask" 2>nul
 if errorlevel 1 (
     echo [2/3] Installing dependencies (one-time^)...
-    "%PIP_EXE%" install -r "%DIR%requirements.txt" --target="%PY_DIR%\Lib\site-packages" --no-warn-script-location -q
+    "%PY_EXE%" -m pip install -r "%DIR%requirements.txt" --target="%PY_DIR%\Lib\site-packages" --no-warn-script-location -q
     if errorlevel 1 (
         echo ERROR: Failed to install dependencies.
         echo Try right-clicking start.bat and selecting "Run as administrator".
