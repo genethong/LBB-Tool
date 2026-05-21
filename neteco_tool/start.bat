@@ -26,9 +26,9 @@ if not exist "%PY_EXE%" (
     REM Create site-packages folder
     mkdir "%PKGS%" 2>nul
 
-    REM Enable site packages by editing the ._pth file
+    REM Edit the ._pth file: enable site + add Lib\site-packages to path
     for %%f in ("%PY_DIR%\python*.pth") do (
-        powershell -Command "(Get-Content '%%f' -Raw) -replace '#import site','import site' | Set-Content '%%f'"
+        powershell -Command "(Get-Content '%%f' -Raw) -replace '#import site','Lib\site-packages\nimport site' | Set-Content '%%f'"
     )
 
     REM Unblock downloaded files so Windows security doesn't block them
