@@ -89,6 +89,6 @@ echo ================================================
 echo.
 
 cd /d "%DIR%"
-"%PY_EXE%" app.py
+"%PY_EXE%" run_windows.py
 
 pause
