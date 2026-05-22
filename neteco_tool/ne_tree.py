@@ -83,11 +83,32 @@ def load_from_csv(csv_path: str) -> int:
     return count
 
 
-def load_from_api(client) -> int:
-    """Pull MO tree from NetEco API and store in SQLite."""
+def load_from_api(client, progress_cb=None) -> int:
+    """Pull MO tree from NetEco API and store in SQLite.
+    Optional progress_cb(stage, message, extra) called at key stages:
+      stage='connecting'  extra={}
+      stage='fetching'    extra={'page': N, 'fetched': N}
+      stage='saving'      extra={'saved': N, 'total': N}
+      stage='done'        extra={'count': N}
+    """
     init_db()
-    mos = client.get_mos()
+
+    def _page_cb(page, fetched):
+        if progress_cb:
+            progress_cb("fetching", f"Fetching from NetEco… page {page} ({fetched:,} NEs so far)",
+                        {"page": page, "fetched": fetched})
+
+    if progress_cb:
+        progress_cb("connecting", "Connecting to NetEco API…", {})
+
+    mos = client.get_mos(page_cb=_page_cb)
+
+    if progress_cb:
+        progress_cb("saving", f"Saving {len(mos):,} NEs to database…",
+                    {"saved": 0, "total": len(mos)})
+
     count = 0
+    total = len(mos)
     with get_conn() as conn:
         conn.execute("DELETE FROM ne_nodes")
         batch = []
@@ -108,10 +129,17 @@ def load_from_api(client) -> int:
                     "INSERT OR REPLACE INTO ne_nodes VALUES (?,?,?,?,?,?,?,?)", batch
                 )
                 batch.clear()
+                if progress_cb:
+                    progress_cb("saving", f"Saving to database… {count:,} / {total:,}",
+                                {"saved": count, "total": total})
         if batch:
             conn.executemany(
                 "INSERT OR REPLACE INTO ne_nodes VALUES (?,?,?,?,?,?,?,?)", batch
             )
+
+    if progress_cb:
+        progress_cb("done", f"Loaded {count:,} NE nodes successfully", {"count": count})
+
     return count
 
 

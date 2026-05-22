@@ -135,6 +135,15 @@
         </div>
 
         <div id="ne-result" class="mt-3" style="display:none;"></div>
+
+        <!-- NE refresh progress bar -->
+        <div id="ne-progress-wrap" class="mt-3" style="display:none;">
+          <div style="font-size:12px;color:#475569;margin-bottom:6px;" id="ne-progress-msg">Starting…</div>
+          <div style="background:#e2e8f0;border-radius:6px;height:10px;overflow:hidden;">
+            <div id="ne-progress-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#6366f1);border-radius:6px;transition:width 0.4s ease;"></div>
+          </div>
+          <div style="font-size:11px;color:#94a3b8;margin-top:4px;" id="ne-progress-sub"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -209,18 +218,90 @@ async function uploadCSV(){
   else toast(res.message,"error");
 }
 
-async function refreshFromAPI(){
-  showLoading("Fetching NE tree from NetEco API — this may take a minute…");
-  const r = await fetch("/api/refresh-ne-tree",{method:"POST"});
-  hideLoading();
-  const res = await r.json();
-  const el = document.getElementById("ne-result");
-  el.style.display="block";
-  el.innerHTML = res.success
-    ? `<div class="alert alert-success py-2 mb-0" style="font-size:13px;">✅ ${res.message}</div>`
-    : `<div class="alert alert-danger py-2 mb-0" style="font-size:13px;">❌ ${res.message}</div>`;
-  if(res.success) toast(res.message,"success");
-  else toast(res.message,"error");
+function refreshFromAPI(){
+  const wrap = document.getElementById("ne-progress-wrap");
+  const bar  = document.getElementById("ne-progress-bar");
+  const msg  = document.getElementById("ne-progress-msg");
+  const sub  = document.getElementById("ne-progress-sub");
+  const res  = document.getElementById("ne-result");
+
+  // Reset UI
+  res.style.display = "none";
+  wrap.style.display = "block";
+  bar.style.width = "0%";
+  msg.textContent = "Starting…";
+  sub.textContent = "";
+
+  // Stage → approximate progress %
+  const stageProgress = {connecting: 5, fetching: 15, saving: 80, done: 100, error: 100};
+
+  // Animate "fetching" bar slowly so it feels alive (pages unknown)
+  let fetchAnim = null;
+  function startFetchAnim(currentPct){
+    clearInterval(fetchAnim);
+    let pct = currentPct;
+    fetchAnim = setInterval(() => {
+      // Creep up to max 78% while fetching (leave room for saving stage)
+      if(pct < 78){ pct += 0.3; bar.style.width = pct + "%"; }
+    }, 400);
+  }
+
+  const es = new EventSource("/api/refresh-ne-tree/stream");
+
+  es.onmessage = function(e){
+    const d = JSON.parse(e.data);
+
+    if(d.stage === "end"){ es.close(); return; }
+
+    if(d.stage === "fetching"){
+      if(fetchAnim === null) startFetchAnim(stageProgress.connecting);
+      msg.textContent = d.message;
+      const x = d.extra || {};
+      sub.textContent = x.page ? `Page ${x.page} — ${(x.fetched||0).toLocaleString()} NEs fetched` : "";
+    } else {
+      clearInterval(fetchAnim); fetchAnim = null;
+      const pct = stageProgress[d.stage] || 0;
+      bar.style.width = pct + "%";
+      msg.textContent = d.message;
+      const x = d.extra || {};
+      if(d.stage === "saving" && x.total){
+        const done = x.saved || 0;
+        const savePct = x.total > 0 ? Math.round((done/x.total)*20) : 0; // saving = 80→100
+        bar.style.width = (80 + savePct) + "%";
+        sub.textContent = done > 0
+          ? `${done.toLocaleString()} / ${x.total.toLocaleString()} records written`
+          : `${x.total.toLocaleString()} NEs to write…`;
+      } else {
+        sub.textContent = "";
+      }
+    }
+
+    if(d.stage === "done"){
+      es.close();
+      bar.style.background = "linear-gradient(90deg,#22c55e,#16a34a)";
+      setTimeout(()=>{ wrap.style.display="none"; bar.style.background="linear-gradient(90deg,#3b82f6,#6366f1)"; },3000);
+      res.style.display = "block";
+      res.innerHTML = `<div class="alert alert-success py-2 mb-0" style="font-size:13px;">✅ ${d.message}</div>`;
+      toast(d.message,"success");
+    }
+    if(d.stage === "error"){
+      es.close();
+      bar.style.background = "#ef4444";
+      wrap.style.display="none"; bar.style.background="linear-gradient(90deg,#3b82f6,#6366f1)";
+      res.style.display = "block";
+      res.innerHTML = `<div class="alert alert-danger py-2 mb-0" style="font-size:13px;">❌ ${d.message}</div>`;
+      toast(d.message,"error");
+    }
+  };
+
+  es.onerror = function(){
+    es.close();
+    clearInterval(fetchAnim);
+    wrap.style.display = "none";
+    res.style.display = "block";
+    res.innerHTML = `<div class="alert alert-danger py-2 mb-0" style="font-size:13px;">❌ Connection lost — please try again.</div>`;
+    toast("Stream disconnected","error");
+  };
 }
 
 // ── Signal Dictionary status (read-only, auto-loaded at startup) ──

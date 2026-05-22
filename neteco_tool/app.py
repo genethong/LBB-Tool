@@ -19,12 +19,17 @@ from flask import (
     send_file, session, Response, stream_with_context, redirect, url_for, g
 )
 
+import threading
 import ne_tree
 import reports as rpt
 import analysis as ana
 import lbb_validation as lbb_val
 import user_db as udb
 from neteco_client import NetEcoClient, NetEcoAPIError
+
+# ── NE tree refresh progress state ────────────
+_ne_refresh_state: dict = {"stage": "idle", "message": "", "extra": {}}
+_ne_refresh_lock  = threading.Lock()
 
 # ─────────────────────────────────────────────
 # App setup
@@ -159,6 +164,13 @@ def format_number(val):
 # Config helpers
 # ─────────────────────────────────────────────
 def load_config() -> dict:
+    # Environment variables take priority (Render / cloud deployment)
+    if os.environ.get("NETECO_URL"):
+        return {
+            "neteco_url": os.environ["NETECO_URL"],
+            "username":   os.environ.get("NETECO_USERNAME", ""),
+            "password":   os.environ.get("NETECO_PASSWORD", ""),
+        }
     if os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE) as f:
             return json.load(f)
@@ -508,7 +520,7 @@ def api_search_sites():
 
 @app.route("/api/refresh-ne-tree", methods=["POST"])
 def api_refresh_ne_tree():
-    """Refresh NE tree from NetEco API."""
+    """Refresh NE tree from NetEco API (blocking, kept for backward compat)."""
     client = get_client()
     if not client:
         return jsonify({"success": False, "message": "Not configured"})
@@ -520,6 +532,59 @@ def api_refresh_ne_tree():
         return jsonify({"success": False, "message": str(e)})
     except Exception as e:
         return jsonify({"success": False, "message": str(e)})
+
+
+@app.route("/api/refresh-ne-tree/stream")
+def api_refresh_ne_tree_stream():
+    """SSE stream: runs NE tree refresh in background thread, streams live progress."""
+    client = get_client()
+    if not client:
+        def _err():
+            yield f"data: {json.dumps({'stage':'error','message':'Not configured','extra':{}})}\n\n"
+        return Response(stream_with_context(_err()), content_type="text/event-stream",
+                        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    def _run():
+        global _ne_refresh_state
+        def _cb(stage, message, extra):
+            with _ne_refresh_lock:
+                _ne_refresh_state = {"stage": stage, "message": message, "extra": extra}
+        try:
+            ne_tree.load_from_api(client, progress_cb=_cb)
+            refresh_session(client)
+        except Exception as exc:
+            with _ne_refresh_lock:
+                _ne_refresh_state = {"stage": "error", "message": str(exc), "extra": {}}
+
+    @stream_with_context
+    def _generate():
+        global _ne_refresh_state
+        # Reset state and kick off background thread
+        with _ne_refresh_lock:
+            _ne_refresh_state = {"stage": "starting", "message": "Starting…", "extra": {}}
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+
+        last_sent = None
+        while True:
+            with _ne_refresh_lock:
+                state = dict(_ne_refresh_state)
+            # Only send when state changes (avoid flooding)
+            if state != last_sent:
+                yield f"data: {json.dumps(state)}\n\n"
+                last_sent = dict(state)
+            if state["stage"] in ("done", "error"):
+                break
+            time.sleep(0.4)
+        # Final flush in case thread finished between checks
+        with _ne_refresh_lock:
+            state = dict(_ne_refresh_state)
+        if state != last_sent:
+            yield f"data: {json.dumps(state)}\n\n"
+        yield "data: {\"stage\":\"end\"}\n\n"
+
+    return Response(_generate(), content_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/api/upload-cm-mo", methods=["POST"])

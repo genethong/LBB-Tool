@@ -99,9 +99,10 @@ class NetEcoClient:
         elif self._openid_time and (time.time() - self._openid_time) > 1500:
             self.login()
 
-    def _get(self, path: str, params: dict) -> dict:
+    def _get(self, path: str, params: dict, page_cb=None) -> dict:
         """Generic paginated GET — params passed as custom HTTP header.
         Auto-retries once on 1204 (token expired/invalidated) by forcing re-login.
+        Optional page_cb(page, fetched_so_far) called after each page completes.
         """
         self.ensure_logged_in()
         url = f"{self.base_url}{path}"
@@ -134,6 +135,8 @@ class NetEcoClient:
             chunk = body.get("data") or []
             if isinstance(chunk, list):
                 all_data.extend(chunk)
+                if page_cb:
+                    page_cb(page, len(all_data))
                 if len(chunk) < PAGE_SIZE:
                     break
                 page += 1
@@ -172,9 +175,9 @@ class NetEcoClient:
     def get_mo_types(self) -> list:
         return self._get("/rest/openapi/neteco/nbi/v2/motype", {}).get("data", [])
 
-    def get_mos(self, extra_params: dict = None) -> list:
+    def get_mos(self, extra_params: dict = None, page_cb=None) -> list:
         params = extra_params or {}
-        return self._get("/rest/openapi/neteco/nbi/v2/mo", params).get("data", [])
+        return self._get("/rest/openapi/neteco/nbi/v2/mo", params, page_cb=page_cb).get("data", [])
 
     # ─────────────────────────────────────────────
     # Signal Management
