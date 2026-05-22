@@ -305,6 +305,38 @@
       </div>
     </div>
 
+    <!-- 30-Day Grid Pattern panel -->
+    <div class="dc-load-panel" style="margin-top:16px;" id="grid-panel-30">
+      <div class="dc-header">
+        <i data-feather="radio" style="width:14px;height:14px;color:#10b981;"></i>
+        <h6>30-Day Grid Pattern</h6>
+        <button class="btn btn-sm btn-primary" id="btn-load-grid-30" onclick="startGridPattern(30)">
+          <i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load 30d Grid
+        </button>
+      </div>
+      <div class="dc-load-body" id="grid-body-30">
+        <div style="padding:20px 18px;font-size:13px;color:#94a3b8;text-align:center;">
+          Click <strong>Load 30d Grid</strong> to fetch 30-day AC availability from NetEco.
+        </div>
+      </div>
+    </div>
+
+    <!-- 90-Day Grid Pattern panel -->
+    <div class="dc-load-panel" style="margin-top:16px;" id="grid-panel-90">
+      <div class="dc-header">
+        <i data-feather="radio" style="width:14px;height:14px;color:#6366f1;"></i>
+        <h6>90-Day Grid Pattern</h6>
+        <button class="btn btn-sm btn-primary" id="btn-load-grid-90" onclick="startGridPattern(90)">
+          <i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load 90d Grid
+        </button>
+      </div>
+      <div class="dc-load-body" id="grid-body-90">
+        <div style="padding:20px 18px;font-size:13px;color:#94a3b8;text-align:center;">
+          Click <strong>Load 90d Grid</strong> to fetch 90-day AC availability from NetEco.
+        </div>
+      </div>
+    </div>
+
   </div><!-- /site-panel -->
   {% endif %}
 
@@ -458,6 +490,14 @@ function selectSite(dn, name, status) {
       Click <strong>Load ${days}d Data</strong> to fetch load history from NetEco.</div>`;
     const btn = document.getElementById(`btn-load-dc-${days}`);
     if (btn) { btn.disabled = false; btn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load ${days}d Data`; }
+    // Reset grid pattern panels too
+    if (_gridEventSources[days]) { _gridEventSources[days].close(); delete _gridEventSources[days]; }
+    if (_gridCharts[days])       { _gridCharts[days].destroy();     delete _gridCharts[days]; }
+    const gbody = document.getElementById(`grid-body-${days}`);
+    if (gbody) gbody.innerHTML = `<div style="padding:20px 18px;font-size:13px;color:#94a3b8;text-align:center;">
+      Click <strong>Load ${days}d Grid</strong> to fetch AC availability from NetEco.</div>`;
+    const gbtn = document.getElementById(`btn-load-grid-${days}`);
+    if (gbtn) { gbtn.disabled = false; gbtn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load ${days}d Grid`; }
   });
   feather.replace();
 
@@ -1176,6 +1216,261 @@ function rerenderDCLoad(days) {
   // Destroy old chart before re-render
   if (_dcCharts[days]) { _dcCharts[days].destroy(); _dcCharts[days] = null; }
   renderDCLoadResults(d, days, dod);
+}
+
+// ── Grid Pattern SSE ──────────────────────────────────────────────
+const _gridEventSources = {};   // keyed by days
+const _gridCharts       = {};   // Chart.js instances keyed by days
+
+function startGridPattern(days) {
+  if (!_currentSiteDn) return;
+  const bodyId = `grid-body-${days}`;
+  const btnId  = `btn-load-grid-${days}`;
+  const btn    = document.getElementById(btnId);
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner-border spinner-border-sm"></span> Loading…`;
+
+  if (_gridCharts[days]) { _gridCharts[days].destroy(); _gridCharts[days] = null; }
+
+  document.getElementById(bodyId).innerHTML = `
+    <div style="padding:16px 18px;">
+      <div style="font-size:12px;color:#64748b;margin-bottom:6px;" id="grid-prog-lbl-${days}">Connecting…</div>
+      <div class="progress-bar-wrap">
+        <div class="progress-bar-fill" id="grid-prog-bar-${days}" style="width:0%;background:#10b981;"></div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:4px;" id="grid-prog-chk-${days}">Chunk 0 / 0</div>
+    </div>`;
+
+  if (_gridEventSources[days]) { _gridEventSources[days].close(); }
+
+  const url = `/api/site/grid-pattern?site_dn=${encodeURIComponent(_currentSiteDn)}&days=${days}`;
+  const es  = new EventSource(url);
+  _gridEventSources[days] = es;
+
+  es.onmessage = (evt) => {
+    try {
+      const d = JSON.parse(evt.data);
+      if (d.error) {
+        es.close();
+        document.getElementById(bodyId).innerHTML =
+          `<div style="padding:20px 18px;color:#ef4444;font-size:13px;">${d.error}</div>`;
+        btn.disabled = false;
+        btn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Retry`;
+        feather.replace(); return;
+      }
+      if (d.progress !== undefined) {
+        const bar = document.getElementById(`grid-prog-bar-${days}`);
+        const lbl = document.getElementById(`grid-prog-lbl-${days}`);
+        const chk = document.getElementById(`grid-prog-chk-${days}`);
+        if (bar) bar.style.width = d.progress + "%";
+        if (lbl) lbl.textContent = `Fetching AC data… ${d.progress}%`;
+        if (chk) chk.textContent = `Chunk ${d.chunk} / ${d.total}`;
+      }
+      if (d.done) {
+        es.close();
+        renderGridPattern(d, days);
+        btn.disabled = false;
+        btn.innerHTML = `<i data-feather="refresh-cw" style="width:12px;height:12px;"></i> Refresh`;
+        feather.replace();
+      }
+    } catch (e) { /* ignore parse errors */ }
+  };
+
+  es.onerror = () => {
+    es.close();
+    document.getElementById(bodyId).innerHTML =
+      `<div style="padding:20px 18px;color:#ef4444;font-size:13px;">Connection error. Please try again.</div>`;
+    btn.disabled = false;
+    btn.innerHTML = `<i data-feather="download-cloud" style="width:12px;height:12px;"></i> Load ${days}d Grid`;
+    feather.replace();
+  };
+}
+
+function renderGridPattern(d, days) {
+  const bodyId = `grid-body-${days}`;
+  const qr     = d.query_range || {};
+  const perNe  = d.per_ne || [];
+
+  let html = `<div style="padding:14px 16px;">`;
+
+  if (!perNe.length) {
+    html += `<div style="padding:12px;background:#fef9c3;border:1px solid #fde047;border-radius:6px;font-size:12px;color:#92400e;">
+      No AC power readings returned for the ${days}-day window.
+    </div></div>`;
+    document.getElementById(bodyId).innerHTML = html;
+    return;
+  }
+
+  // ── Render each NE independently ──
+  perNe.forEach((ne, neIdx) => {
+    const neChartId = `grid-chart-${days}-${neIdx}`;
+    const stats     = ne.stats   || {};
+    const daily     = ne.daily_summary || [];
+    const events    = ne.events  || [];
+
+    const availColor = stats.grid_avail_pct > 90 ? "#15803d"
+                     : stats.grid_avail_pct > 80 ? "#0369a1"
+                     : stats.grid_avail_pct > 70 ? "#b45309" : "#b91c1c";
+    const catBg      = stats.grid_avail_pct > 90 ? "#dcfce7;color:#15803d"
+                     : stats.grid_avail_pct > 80 ? "#dbeafe;color:#1e40af"
+                     : stats.grid_avail_pct > 70 ? "#fef3c7;color:#92400e"
+                     :                             "#fee2e2;color:#991b1b";
+    const gensetNote = stats.has_genset_ne
+      ? `<span style="color:#22c55e;font-size:10px;margin-left:4px;">✓ Genset NE</span>`
+      : `<span style="color:#f59e0b;font-size:10px;margin-left:4px;">⚠ freq only</span>`;
+
+    // Section header (always shown — includes NE name + category badge)
+    html += `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+                          padding:7px 10px;background:#f1f5f9;border-radius:6px;
+                          margin-bottom:10px;margin-top:${neIdx > 0 ? '18px' : '0'};">
+      <i data-feather="radio" style="width:12px;height:12px;flex-shrink:0;"></i>
+      <span style="font-size:12px;font-weight:600;color:#374151;">${ne.ne_name}</span>
+      <span style="background:${catBg};border-radius:20px;padding:2px 9px;font-size:11px;font-weight:600;">
+        ${days}d: ${stats.grid_category}
+      </span>
+      ${gensetNote}
+    </div>`;
+
+    // Stat pills
+    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:8px 12px;text-align:center;min-width:90px;">
+        <div style="font-size:18px;font-weight:700;color:${availColor};">${stats.grid_avail_pct}%</div>
+        <div style="font-size:10px;color:#64748b;">Availability</div>
+      </div>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;text-align:center;min-width:80px;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;">${stats.outage_event_count}</div>
+        <div style="font-size:10px;color:#64748b;">Outages</div>
+      </div>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;text-align:center;min-width:90px;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;">${stats.avg_daily_outages}</div>
+        <div style="font-size:10px;color:#64748b;">Avg/Day</div>
+      </div>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;text-align:center;min-width:90px;">
+        <div style="font-size:15px;font-weight:700;color:#ef4444;">${stats.avg_outage_min}m</div>
+        <div style="font-size:10px;color:#64748b;">Avg Duration</div>
+      </div>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:8px 12px;text-align:center;min-width:90px;">
+        <div style="font-size:15px;font-weight:700;color:#b91c1c;">${stats.longest_outage_min}m</div>
+        <div style="font-size:10px;color:#64748b;">Longest</div>
+      </div>
+      ${stats.total_gen_h > 0 ? `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;text-align:center;min-width:80px;">
+        <div style="font-size:15px;font-weight:700;color:#f59e0b;">${stats.total_gen_h}h</div>
+        <div style="font-size:10px;color:#64748b;">Generator</div>
+      </div>` : ""}
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:8px 12px;text-align:center;min-width:80px;">
+        <div style="font-size:15px;font-weight:700;color:#ef4444;">${stats.total_outage_h}h</div>
+        <div style="font-size:10px;color:#64748b;">Total Outage</div>
+      </div>
+    </div>`;
+
+    // Legend
+    html += `<div style="display:flex;gap:10px;font-size:10px;color:#64748b;margin-bottom:6px;">
+      <span><span style="display:inline-block;width:9px;height:9px;background:#22c55e;border-radius:2px;margin-right:2px;"></span>Grid</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:#f59e0b;border-radius:2px;margin-right:2px;"></span>Generator</span>
+      <span><span style="display:inline-block;width:9px;height:9px;background:#ef4444;border-radius:2px;margin-right:2px;"></span>Outage</span>
+    </div>`;
+
+    // Daily stacked bar chart
+    const chartH = Math.max(160, Math.min(daily.length * 20 + 40, 480));
+    html += `<div style="position:relative;height:${chartH}px;margin-bottom:10px;">
+      <canvas id="${neChartId}"></canvas>
+    </div>`;
+
+    // Outage event table
+    const outageEvs = events.filter(e => e.type === "OUTAGE" || e.type === "OUTAGE+GEN");
+    const genEvs    = events.filter(e => e.type === "GENERATOR" || e.type === "OUTAGE+GEN");
+    if (events.length > 0) {
+      html += `<details style="margin-bottom:4px;">
+        <summary style="font-size:11px;color:#64748b;cursor:pointer;list-style:none;padding:3px 0;">
+          <span style="text-decoration:underline dotted;">
+            ${outageEvs.length > 0 ? `⚡ ${outageEvs.length} outage(s)` : ''}
+            ${genEvs.length    > 0 ? ` · 🔋 ${genEvs.length} with gen` : ''}
+            — expand
+          </span>
+        </summary>
+        <div style="margin-top:4px;overflow-x:auto;">
+          <table style="font-size:11px;width:100%;border-collapse:collapse;">
+            <thead><tr style="background:#f8fafc;">
+              <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;color:#64748b;">Start (BDT)</th>
+              <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;color:#64748b;">End (BDT)</th>
+              <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #e2e8f0;color:#64748b;">Total</th>
+              <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #e2e8f0;color:#64748b;">Outage</th>
+              <th style="padding:3px 6px;text-align:right;border-bottom:1px solid #e2e8f0;color:#64748b;">Gen</th>
+              <th style="padding:3px 6px;text-align:left;border-bottom:1px solid #e2e8f0;color:#64748b;">Type</th>
+            </tr></thead><tbody>`;
+      events.forEach(ev => {
+        const isO = ev.type==="OUTAGE", isM = ev.type==="OUTAGE+GEN";
+        const tc  = isO?"#ef4444":isM?"#7c3aed":"#f59e0b";
+        const bg  = isO?"background:#fef2f2;":isM?"background:#f5f3ff;":"background:#fffbeb;";
+        const fmt = m => m >= 60 ? `${(m/60).toFixed(1)}h` : `${m}m`;
+        html += `<tr style="${bg}">
+          <td style="padding:2px 6px;font-family:monospace;">${ev.start_bdt}</td>
+          <td style="padding:2px 6px;font-family:monospace;">${ev.end_bdt}</td>
+          <td style="padding:2px 6px;text-align:right;font-weight:600;">${fmt(ev.duration_min)}</td>
+          <td style="padding:2px 6px;text-align:right;color:#ef4444;">${ev.outage_min>0?fmt(ev.outage_min):'—'}</td>
+          <td style="padding:2px 6px;text-align:right;color:#f59e0b;">${ev.gen_min>0?fmt(ev.gen_min):'—'}</td>
+          <td style="padding:2px 6px;color:${tc};font-weight:600;">${ev.type}</td>
+        </tr>`;
+      });
+      html += `</tbody></table></div></details>`;
+    } else {
+      html += `<div style="font-size:11px;color:#22c55e;">✓ No outage events in this window</div>`;
+    }
+  });
+
+  // Footer
+  html += `<div style="font-size:11px;color:#94a3b8;margin-top:10px;">
+    ${days}d · sigs 30008+30007 · ${d.source || ''} · ${qr.start_bdt||'?'} → ${qr.end_bdt||'?'}
+  </div></div>`;
+
+  document.getElementById(bodyId).innerHTML = html;
+  if (typeof feather !== "undefined") feather.replace();
+
+  // ── Build one Chart.js instance per NE ──
+  if (typeof Chart === "undefined") return;
+  if (_gridCharts[days]) {
+    if (Array.isArray(_gridCharts[days])) _gridCharts[days].forEach(c => c.destroy());
+    else _gridCharts[days].destroy();
+    _gridCharts[days] = null;
+  }
+  const charts = [];
+  perNe.forEach((ne, neIdx) => {
+    const daily     = ne.daily_summary || [];
+    const neChartId = `grid-chart-${days}-${neIdx}`;
+    const ctx = document.getElementById(neChartId);
+    if (!ctx || !daily.length) return;
+    charts.push(new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: daily.map(d => d.date),
+        datasets: [
+          { label:"Grid (h)",      data: daily.map(d=>d.grid_h),   backgroundColor:"#22c55ecc", borderColor:"#22c55e", borderWidth:1, borderRadius:2 },
+          { label:"Generator (h)", data: daily.map(d=>d.gen_h),    backgroundColor:"#f59e0bcc", borderColor:"#f59e0b", borderWidth:1, borderRadius:2 },
+          { label:"Outage (h)",    data: daily.map(d=>d.outage_h), backgroundColor:"#ef4444cc", borderColor:"#ef4444", borderWidth:1, borderRadius:2 },
+        ],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position:"top", labels:{ font:{size:10}, boxWidth:10, padding:8 } },
+          tooltip: {
+            callbacks: {
+              label: c => ` ${c.dataset.label}: ${c.parsed.x.toFixed(2)} h`,
+              afterBody: items => [`  Availability: ${daily[items[0].dataIndex].avail_pct}%`],
+            },
+          },
+        },
+        scales: {
+          x: { stacked:true, max:24, title:{display:true,text:"Hours",font:{size:10}}, grid:{color:"#f1f5f9"}, ticks:{font:{size:10}} },
+          y: { stacked:true, grid:{display:false}, ticks:{font:{size:10}} },
+        },
+      },
+    }));
+  });
+  _gridCharts[days] = charts;
 }
 
 feather.replace();

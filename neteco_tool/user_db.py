@@ -114,12 +114,10 @@ def _now_ms() -> int:
 def _ensure_default_admin():
     """Create default admin/admin123 if no users exist yet."""
     with get_conn() as conn:
-        count = conn.execute("SELECT COUNT(*) as c FROM users").fetchone()["c"]
-        if count == 0:
-            conn.execute(
-                "INSERT INTO users (username, password_hash, is_admin, created_at) VALUES (?,?,?,?)",
-                ("admin", generate_password_hash("admin123"), 1, _now_bdt()),
-            )
+        conn.execute(
+            "INSERT OR IGNORE INTO users (username, password_hash, is_admin, created_at) VALUES (?,?,?,?)",
+            ("admin", generate_password_hash("admin123"), 1, _now_bdt()),
+        )
 
 
 # ─────────────────────────────────────────────

@@ -1508,6 +1508,378 @@ def api_site_dc_load():
     )
 
 
+@app.route("/api/site/grid-pattern")
+def api_site_grid_pattern():
+    """
+    SSE stream: per-NE AC grid pattern for one site over 30 or 90 days.
+
+    Each AC Input Distribution NE is analysed independently — results are
+    never merged or averaged across NEs.  A site with 2 rectifier systems
+    returns 2 separate sets of daily_summary / events / stats.
+
+    Outage detection (per NE):
+      power == 0  → OUTAGE  (device records 0 when AC is off)
+      power  > 0  → GRID or GENERATOR:
+        P1: Genset NE signal 30012 == 2 (Running) within ±interval
+        P2: This NE's own frequency (30007) outside 49–51 Hz
+        Default: GRID
+
+    Comm gaps (no reading at all, not even a zero) are gap-filled as OUTAGE.
+
+    Event types emitted:
+      {progress: 0–100, chunk: N, total: M}
+      {done: true, per_ne: [...], query_range, source}
+      {error: "..."}
+    """
+    site_dn = request.args.get("site_dn", "").strip()
+    try:
+        days = max(1, min(int(request.args.get("days", 30)), 90))
+    except (ValueError, TypeError):
+        days = 30
+
+    if not site_dn:
+        return jsonify({"error": "site_dn required"}), 400
+
+    client, err = fresh_login_client()
+    if err:
+        return err
+
+    def _generate():
+        try:
+            import bisect
+            from statistics import mode as _stat_mode
+
+            GRID_LOW       = 49.0
+            GRID_HIGH      = 51.0
+            SIG_AC_POWER   = 30008
+            SIG_AC_FREQ    = 30007
+            SIG_GENSET     = 30012
+            GENSET_RUNNING = 2
+
+            # ── Step 1: Find NEs ──────────────────────────────────────
+            ne_map_ac    = ne_tree.get_dns_by_type_under_sites([site_dn], ["AC Input Distribution"])
+            ne_map_gen   = ne_tree.get_dns_by_type_under_sites([site_dn], ["Genset"])
+
+            ac_nes     = ne_map_ac.get("AC Input Distribution", [])
+            genset_nes = ne_map_gen.get("Genset", [])
+
+            if not ac_nes:
+                yield f"data: {json.dumps({'error': 'No AC Input Distribution NEs found for this site. Ensure the NE tree is loaded.'})}\n\n"
+                return
+
+            def _dedup(nes):
+                seen, out = set(), []
+                for ne in nes:
+                    if ne["dn"] not in seen:
+                        seen.add(ne["dn"]); out.append(ne)
+                return out
+
+            ac_nes     = _dedup(ac_nes)[:50]
+            genset_nes = _dedup(genset_nes)[:10]
+            ac_dns     = [ne["dn"] for ne in ac_nes]
+            genset_dns = [ne["dn"] for ne in genset_nes]
+
+            source_parts = [f"AC NE × {len(ac_dns)}"]
+            if genset_dns:
+                source_parts.append(f"Genset NE × {len(genset_dns)}")
+            source_desc = " + ".join(source_parts)
+            log.info("grid-pattern: site=%s  days=%d  ac=%d  genset=%d",
+                     site_dn, days, len(ac_dns), len(genset_dns))
+
+            # ── Step 2: Fetch all signals in 23h chunks ───────────────
+            now_ms   = int(time.time() * 1000)
+            start_ms = now_ms - days * 24 * 3600 * 1000
+            CHUNK_MS = 23 * 3600 * 1000
+
+            chunks: list = []
+            t = start_ms
+            while t < now_ms:
+                chunks.append((t, min(t + CHUNK_MS, now_ms)))
+                t += CHUNK_MS
+
+            total_chunks = len(chunks)
+            chunk_done   = 0
+            ac_raw:     list = []
+            genset_raw: list = []
+
+            for cs, ce in chunks:
+                try:
+                    ac_raw.extend(client.get_statistic(ac_dns, [SIG_AC_POWER, SIG_AC_FREQ], cs, ce))
+                except Exception as _ce:
+                    log.warning("grid-pattern AC chunk error: %s", _ce)
+                if genset_dns:
+                    try:
+                        genset_raw.extend(client.get_statistic(genset_dns, [SIG_GENSET], cs, ce))
+                    except Exception as _ce:
+                        log.warning("grid-pattern genset chunk error: %s", _ce)
+                chunk_done += 1
+                pct = int(chunk_done / total_chunks * 100)
+                yield f"data: {json.dumps({'progress': pct, 'chunk': chunk_done, 'total': total_chunks})}\n\n"
+
+            # ── Step 3: Split raw readings by NE DN ───────────────────
+            # Each NE is analysed completely independently.
+            def _get_val(item):
+                v = (item.get("statisticValue") if item.get("statisticValue") is not None
+                     else item.get("signalValue") if item.get("signalValue") is not None
+                     else item.get("value"))
+                return v
+
+            def _get_ts(item):
+                return (item.get("statisticTime") or item.get("collectTime")
+                        or item.get("signalResultTime") or item.get("endTime"))
+
+            # ne_power[dn][ts] = power_kw
+            # ne_freq[dn][ts]  = freq_hz
+            ne_power: dict = {dn: {} for dn in ac_dns}
+            ne_freq:  dict = {dn: {} for dn in ac_dns}
+
+            for item in ac_raw:
+                dn = item.get("dn") or item.get("neDn") or item.get("DN", "")
+                if dn not in ne_power:
+                    continue
+                try:
+                    sig = int(item.get("signalId", 0))
+                    ts  = int(_get_ts(item))
+                    v   = float(_get_val(item))
+                except (TypeError, ValueError):
+                    continue
+                if sig == SIG_AC_POWER:
+                    ne_power[dn][ts] = v
+                elif sig == SIG_AC_FREQ:
+                    ne_freq[dn][ts]  = v
+
+            # Genset running timestamps — shared across all NEs (site-level)
+            genset_running: list = []
+            for item in genset_raw:
+                try:
+                    if int(item.get("signalId", 0)) != SIG_GENSET:
+                        continue
+                    ts = int(_get_ts(item))
+                    v  = round(float(_get_val(item)))
+                    if v == GENSET_RUNNING:
+                        genset_running.append(ts)
+                except (TypeError, ValueError):
+                    continue
+            genset_running.sort()
+            log.info("grid-pattern: genset_running_pts=%d", len(genset_running))
+
+            # ── Step 4: Helper functions (shared across all NEs) ──────
+            def _detect_interval(ts_list):
+                if len(ts_list) < 3:
+                    return 900_000
+                gaps = [ts_list[i+1] - ts_list[i] for i in range(len(ts_list)-1)]
+                normal = [g for g in gaps if 0 < g < 7_200_000]
+                if not normal:
+                    return 900_000
+                try:
+                    return _stat_mode(normal)
+                except Exception:
+                    return sorted(normal)[len(normal)//2]
+
+            def _classify_ac_on(ts, freq_by_t, interval_ms):
+                """Classify a slot where power > 0 as GRID or GENERATOR."""
+                # P1: Genset NE running-state
+                if genset_running:
+                    idx = bisect.bisect_left(genset_running, ts)
+                    for i in (idx - 1, idx):
+                        if 0 <= i < len(genset_running):
+                            if abs(genset_running[i] - ts) <= interval_ms:
+                                return "GENERATOR"
+                # P2: This NE's own frequency
+                freq = freq_by_t.get(ts)
+                if freq is not None and not (GRID_LOW <= freq <= GRID_HIGH):
+                    return "GENERATOR"
+                return "GRID"
+
+            def _build_timeline(power_by_t, freq_by_t, interval_ms):
+                """Build sorted [(ts, state)] for one NE."""
+                gap_tolerance = interval_ms * 1.5
+                power_s = sorted(power_by_t.items(), key=lambda x: x[0])
+                if not power_s:
+                    return []
+                timeline = []
+                prev_t = power_s[0][0]
+                pv0    = power_s[0][1]
+                timeline.append((prev_t,
+                                  "OUTAGE" if pv0 == 0 else _classify_ac_on(prev_t, freq_by_t, interval_ms)))
+                for ts, pv in power_s[1:]:
+                    gap = ts - prev_t
+                    if gap > gap_tolerance:
+                        fill = prev_t + interval_ms
+                        while fill < ts:
+                            timeline.append((fill, "OUTAGE"))
+                            fill += interval_ms
+                    state = "OUTAGE" if pv == 0 else _classify_ac_on(ts, freq_by_t, interval_ms)
+                    timeline.append((ts, state))
+                    prev_t = ts
+                timeline.sort(key=lambda x: x[0])
+                return timeline
+
+            def _group_events(timeline, interval_ms):
+                """Group timeline into outage/generator events."""
+                events = []
+                in_event = False
+                ev_start = last_non_grid = 0
+                ev_outage_slots = ev_gen_slots = 0
+
+                def _flush(ev_start, last_non_grid, ev_outage_slots, ev_gen_slots):
+                    ev_end  = last_non_grid + interval_ms
+                    dur_min = (ev_end - ev_start) / 60_000
+                    if dur_min < 5:
+                        return
+                    slot_min = interval_ms / 60_000
+                    if ev_outage_slots > 0 and ev_gen_slots > 0:
+                        ev_type = "OUTAGE+GEN"
+                    elif ev_gen_slots > 0:
+                        ev_type = "GENERATOR"
+                    else:
+                        ev_type = "OUTAGE"
+                    events.append({
+                        "start_ms":     ev_start,
+                        "end_ms":       ev_end,
+                        "duration_min": round(dur_min, 1),
+                        "outage_min":   round(ev_outage_slots * slot_min, 1),
+                        "gen_min":      round(ev_gen_slots    * slot_min, 1),
+                        "type":         ev_type,
+                        "start_bdt":    datetime.fromtimestamp(ev_start / 1000, tz=_BDT).strftime("%Y-%m-%d %H:%M"),
+                        "end_bdt":      datetime.fromtimestamp(ev_end   / 1000, tz=_BDT).strftime("%Y-%m-%d %H:%M"),
+                    })
+
+                for ts, state in timeline:
+                    if not in_event:
+                        if state in ("OUTAGE", "GENERATOR"):
+                            in_event        = True
+                            ev_start        = ts
+                            last_non_grid   = ts
+                            ev_outage_slots = 1 if state == "OUTAGE" else 0
+                            ev_gen_slots    = 1 if state == "GENERATOR" else 0
+                    else:
+                        if state == "GRID":
+                            _flush(ev_start, last_non_grid, ev_outage_slots, ev_gen_slots)
+                            in_event = False
+                        elif state == "OUTAGE":
+                            ev_outage_slots += 1; last_non_grid = ts
+                        elif state == "GENERATOR":
+                            ev_gen_slots    += 1; last_non_grid = ts
+                if in_event:
+                    _flush(ev_start, last_non_grid, ev_outage_slots, ev_gen_slots)
+                return events
+
+            def _daily_summary(timeline, interval_ms):
+                slot_h = interval_ms / 3_600_000
+                buckets: dict = {}
+                for ts, state in timeline:
+                    day = datetime.fromtimestamp(ts / 1000, tz=_BDT).strftime("%Y-%m-%d")
+                    if day not in buckets:
+                        buckets[day] = {"grid_h": 0.0, "gen_h": 0.0, "outage_h": 0.0}
+                    if state == "GRID":
+                        buckets[day]["grid_h"]   += slot_h
+                    elif state == "GENERATOR":
+                        buckets[day]["gen_h"]    += slot_h
+                    else:
+                        buckets[day]["outage_h"] += slot_h
+                result = []
+                for day in sorted(buckets):
+                    b = buckets[day]
+                    total_h = b["grid_h"] + b["gen_h"] + b["outage_h"]
+                    result.append({
+                        "date":      day,
+                        "grid_h":    round(b["grid_h"],   2),
+                        "gen_h":     round(b["gen_h"],    2),
+                        "outage_h":  round(b["outage_h"], 2),
+                        "avail_pct": round(b["grid_h"] / total_h * 100, 1) if total_h > 0 else 0.0,
+                    })
+                return result
+
+            def _ne_stats(events, daily_summary, interval_ms, has_genset_ne, n_readings, days_window):
+                outage_ev = [e for e in events if e["type"] in ("OUTAGE", "OUTAGE+GEN")]
+                gen_ev    = [e for e in events if e["type"] in ("GENERATOR", "OUTAGE+GEN")]
+                tg  = sum(d["grid_h"]   for d in daily_summary)
+                tgn = sum(d["gen_h"]    for d in daily_summary)
+                to  = sum(d["outage_h"] for d in daily_summary)
+                th  = tg + tgn + to
+                all_out_min = [e["outage_min"] for e in outage_ev if e["outage_min"] > 0]
+                avail_pct   = round(tg / th * 100, 2) if th > 0 else 0.0
+
+                # Grid category based on availability %
+                if avail_pct > 90:
+                    grid_category = "Excellent Grid"
+                elif avail_pct > 80:
+                    grid_category = "Good Grid"
+                elif avail_pct > 70:
+                    grid_category = "Poor Grid"
+                else:
+                    grid_category = "Worst Grid"
+
+                # Average daily outages = total outage events / number of days in window
+                n_days = len(daily_summary) if daily_summary else days_window
+                avg_daily_outages = round(len(outage_ev) / n_days, 2) if n_days > 0 else 0
+
+                return {
+                    "readings":            n_readings,
+                    "interval_min":        round(interval_ms / 60_000, 1),
+                    "has_genset_ne":       has_genset_ne,
+                    "grid_avail_pct":      avail_pct,
+                    "grid_category":       grid_category,
+                    "total_grid_h":        round(tg,  1),
+                    "total_gen_h":         round(tgn, 1),
+                    "total_outage_h":      round(to,  1),
+                    "outage_event_count":  len(outage_ev),
+                    "gen_event_count":     len(gen_ev),
+                    "avg_daily_outages":   avg_daily_outages,
+                    "avg_outage_min":      round(sum(all_out_min) / len(all_out_min), 1) if all_out_min else 0,
+                    "longest_outage_min":  round(max(all_out_min, default=0), 1),
+                }
+
+            # ── Step 5: Run analysis independently for each AC NE ─────
+            per_ne = []
+            ne_name_map = {ne["dn"]: ne.get("name", ne["dn"]) for ne in ac_nes}
+
+            for dn in ac_dns:
+                pwr   = ne_power[dn]
+                freq  = ne_freq[dn]
+                if not pwr:
+                    log.info("grid-pattern: NE %s has no power readings — skipping", dn)
+                    continue
+                ts_list    = sorted(pwr.keys())
+                interval   = _detect_interval(ts_list)
+                timeline   = _build_timeline(pwr, freq, interval)
+                events_ne  = _group_events(timeline, interval)
+                daily_ne   = _daily_summary(timeline, interval)
+                stats_ne   = _ne_stats(events_ne, daily_ne, interval,
+                                       len(genset_dns) > 0, len(pwr), days)
+                per_ne.append({
+                    "ne_dn":        dn,
+                    "ne_name":      ne_name_map.get(dn, dn),
+                    "daily_summary": daily_ne,
+                    "events":        events_ne,
+                    "stats":         stats_ne,
+                })
+                log.info("grid-pattern: NE %s  readings=%d  events=%d  avail=%.1f%%",
+                         ne_name_map.get(dn, dn), len(pwr),
+                         stats_ne["outage_event_count"], stats_ne["grid_avail_pct"])
+
+            if not per_ne:
+                yield f"data: {json.dumps({'error': 'AC NEs found but no power readings returned. Try refreshing the NE tree.'})}\n\n"
+                return
+
+            query_range = {
+                "start_bdt": datetime.fromtimestamp(start_ms / 1000, tz=_BDT).strftime("%Y-%m-%d %H:%M BDT"),
+                "end_bdt":   datetime.fromtimestamp(now_ms   / 1000, tz=_BDT).strftime("%Y-%m-%d %H:%M BDT"),
+            }
+            yield f"data: {json.dumps({'done': True, 'per_ne': per_ne, 'query_range': query_range, 'source': source_desc})}\n\n"
+
+        except Exception as _e:
+            log.exception("grid-pattern SSE unhandled error")
+            yield f"data: {json.dumps({'error': str(_e)})}\n\n"
+
+    return Response(
+        stream_with_context(_generate()),
+        content_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.route("/api/validation/lbb-template")
 def api_lbb_template():
     """Serve the blank LBB Validation Excel template."""
