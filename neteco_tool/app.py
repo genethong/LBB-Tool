@@ -1476,10 +1476,9 @@ def api_site_dc_load():
             total_avg_kw  = round(sum(s["avg_kw"]  for s in tenant_stats.values()), 2) if tenant_stats else 0
             total_peak_kw = round(sum(s["peak_kw"] for s in tenant_stats.values()), 2) if tenant_stats else 0
 
-            import datetime as _dt2
             query_range = {
-                "start_utc": _dt2.datetime.utcfromtimestamp(start_ms / 1000).strftime("%Y-%m-%d %H:%M UTC"),
-                "end_utc":   _dt2.datetime.utcfromtimestamp(now_ms   / 1000).strftime("%Y-%m-%d %H:%M UTC"),
+                "start_utc": datetime.fromtimestamp(start_ms / 1000, tz=_BDT).strftime("%Y-%m-%d %H:%M BDT"),
+                "end_utc":   datetime.fromtimestamp(now_ms   / 1000, tz=_BDT).strftime("%Y-%m-%d %H:%M BDT"),
                 "signal":    signal_id,
             }
 
