@@ -460,6 +460,11 @@ def get_ne_context_bulk(ne_dns: list) -> dict:
         ne_own_name = ne_node["name"] if ne_node else ""
         tenant_name = _operator_name_from_ne(ne_own_name)
 
+        # Fallback: if NE name pattern didn't yield a name, map the tenant code
+        # directly. Handles cases like Non-MNO where the NE name format varies.
+        if not tenant_name and tenant and tenant not in _AUXILIARY:
+            tenant_name = _OPERATOR.get(tenant) or _OPERATOR.get(tenant.upper()) or ""
+
         result[ne_dn] = {
             "site_name":   site_name,
             "tenant":      tenant,
